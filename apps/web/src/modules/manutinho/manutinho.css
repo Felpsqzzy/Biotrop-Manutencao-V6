@@ -1,0 +1,429 @@
+/* Manutinho: classes com prefixo manu- (nunca nome genérico). Desfoque só na gaveta (bm-vidro); avisos, linhas e
+   botão flutuante são cor cheia. Animação: só transform/opacity (a gaveta usa Motion; aqui, só :active). */
+
+.manu-pagina {
+  display: grid;
+  gap: var(--bm-s4);
+}
+.manu-cabecalho {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--bm-s3);
+}
+.manu-h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 650;
+}
+.manu-h2 {
+  margin: 0 0 var(--bm-s3);
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+.manu-h3 {
+  margin: var(--bm-s4) 0 var(--bm-s2);
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+.manu-sub,
+.manu-nota,
+.manu-mais {
+  margin: var(--bm-s1) 0 0;
+  color: var(--bm-ink-2);
+  font-size: 0.875rem;
+}
+.manu-vazio {
+  margin: var(--bm-s2) 0;
+  color: var(--bm-ink-3);
+}
+.manu-rotulo {
+  display: block;
+  margin-bottom: var(--bm-s1);
+  color: var(--bm-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.manu-forte {
+  font-weight: 650;
+}
+.manu-grade {
+  display: grid;
+  gap: var(--bm-s4);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+@media (max-width: 900px) {
+  .manu-grade {
+    grid-template-columns: 1fr;
+  }
+}
+.manu-bloco {
+  padding: var(--bm-s5);
+}
+.manu-bloco-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bm-s3);
+}
+.manu-acoes,
+.manu-resumo-contagem {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bm-s2);
+  margin: 0;
+}
+
+/* abas */
+.manu-abas {
+  display: flex;
+  gap: var(--bm-s1);
+  border-bottom: 1px solid var(--bm-line);
+}
+.manu-aba {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bm-s2);
+  padding: var(--bm-s2) var(--bm-s4);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--bm-ink-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.manu-aba[aria-selected='true'] {
+  color: var(--bm-accent);
+  border-bottom-color: var(--bm-accent);
+}
+.manu-aba-contador {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: var(--bm-r-pill);
+  background: var(--bm-surface-3);
+  color: var(--bm-ink);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* selos de nível */
+.manu-selo {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--bm-r-pill);
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.manu-selo--critico {
+  background: var(--bm-bad-soft);
+  color: var(--bm-bad);
+}
+.manu-selo--atencao {
+  background: var(--bm-warn-soft);
+  color: var(--bm-warn);
+}
+.manu-selo--info {
+  background: var(--bm-info-soft);
+  color: var(--bm-info);
+}
+
+/* avisos (item repetido: sem desfoque) */
+.manu-avisos,
+.manu-pessoas,
+.manu-setores,
+.manu-guia-lista {
+  display: grid;
+  gap: var(--bm-s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.manu-aviso,
+.manu-pessoa,
+.manu-setor,
+.manu-guia-item {
+  display: grid;
+  gap: var(--bm-s1);
+  padding: var(--bm-s3);
+  border: 1px solid var(--bm-line);
+  border-left-width: 4px;
+  border-radius: var(--bm-r-ctl);
+  background: var(--bm-surface);
+}
+.manu-aviso--critico {
+  border-left-color: var(--bm-bad);
+}
+.manu-aviso--atencao {
+  border-left-color: var(--bm-warn);
+}
+.manu-aviso--info {
+  border-left-color: var(--bm-info);
+}
+.manu-aviso-topo {
+  display: flex;
+  align-items: center;
+  gap: var(--bm-s2);
+}
+.manu-aviso-titulo {
+  color: var(--bm-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+.manu-aviso-titulo:hover {
+  text-decoration: underline;
+}
+.manu-aviso-detalhe {
+  margin: 0;
+  color: var(--bm-ink-2);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.manu-guia-item p {
+  margin: 0;
+  color: var(--bm-ink-2);
+  font-size: 0.875rem;
+}
+
+/* campos */
+.manu-guia {
+  display: grid;
+  gap: var(--bm-s2);
+}
+.manu-campo {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 var(--bm-s3);
+  border: 1px solid var(--bm-line-strong);
+  border-radius: var(--bm-r-ctl);
+  background: var(--bm-field, var(--bm-surface));
+  color: var(--bm-ink);
+  font: inherit;
+}
+.manu-marcar {
+  display: flex;
+  align-items: center;
+  gap: var(--bm-s2);
+  cursor: pointer;
+}
+.manu-cobranca,
+.manu-cobranca-acoes {
+  display: grid;
+  gap: var(--bm-s3);
+}
+.manu-cobranca-acoes {
+  margin-top: var(--bm-s3);
+  justify-items: start;
+}
+.manu-previa {
+  padding: var(--bm-s3);
+  border-radius: var(--bm-r-ctl);
+  background: var(--bm-surface-2);
+  font-size: 0.875rem;
+}
+.manu-previa p {
+  margin: 0 0 var(--bm-s1);
+}
+
+/* relatório */
+.manu-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--bm-s2);
+  margin: var(--bm-s3) 0 0;
+}
+.manu-kpi {
+  padding: var(--bm-s3);
+  border: 1px solid var(--bm-line);
+  border-radius: var(--bm-r-ctl);
+  background: var(--bm-surface);
+}
+.manu-kpi dt {
+  color: var(--bm-ink-2);
+  font-size: 0.8125rem;
+}
+.manu-kpi dd {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.manu-kpi--critico dd {
+  color: var(--bm-bad);
+}
+.manu-kpi--atencao dd {
+  color: var(--bm-warn);
+}
+.manu-kpi--ok dd {
+  color: var(--bm-ok);
+}
+.manu-linha {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 0.8fr 1fr 1fr 1fr;
+  align-items: center;
+  gap: var(--bm-s2);
+  min-height: 44px;
+  padding: 0 var(--bm-s2);
+  border-bottom: 1px solid var(--bm-line);
+  font-size: 0.875rem;
+}
+.manu-linha--cab {
+  color: var(--bm-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.manu-rolagem {
+  max-height: 560px;
+  overflow: auto;
+}
+.manu-situacao {
+  font-weight: 600;
+}
+.manu-situacao--atrasada {
+  color: var(--bm-bad);
+}
+.manu-situacao--sem_programacao {
+  color: var(--bm-warn);
+}
+.manu-situacao--em_dia {
+  color: var(--bm-ok);
+}
+.manu-impressao {
+  display: none;
+}
+
+/* botão flutuante e gaveta */
+.manu-launcher {
+  position: fixed;
+  right: var(--bm-s5);
+  bottom: var(--bm-s5);
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: var(--bm-r-pill);
+  background: var(--bm-accent-fill);
+  color: var(--bm-on-accent);
+  box-shadow: var(--bm-shadow-2);
+  cursor: pointer;
+  transition: transform var(--bm-fast) var(--bm-ease);
+}
+.manu-launcher:active {
+  transform: scale(0.96);
+}
+.manu-launcher-contador {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: var(--bm-r-pill);
+  background: var(--bm-warn);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 22px;
+}
+.manu-launcher--critico .manu-launcher-contador {
+  background: var(--bm-bad);
+}
+.manu-camada {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.manu-fundo {
+  position: absolute;
+  inset: 0;
+  background: rgb(10 14 24 / 32%);
+}
+.manu-gaveta {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  width: min(420px, 100%);
+  border-radius: var(--bm-r-lg) 0 0 var(--bm-r-lg);
+}
+.manu-gaveta-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--bm-s4) var(--bm-s5) 0;
+}
+.manu-gaveta-corpo {
+  display: grid;
+  align-content: start;
+  gap: var(--bm-s4);
+  padding: var(--bm-s4) var(--bm-s5) var(--bm-s6);
+  overflow: auto;
+}
+.manu-abrir {
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* impressão A4: só o relatório (exportar.ts liga html.manu-imprimir enquanto imprime) */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  html.manu-imprimir body * {
+    visibility: hidden;
+  }
+  html.manu-imprimir body::before {
+    display: none;
+  }
+  html.manu-imprimir .manu-impressao,
+  html.manu-imprimir .manu-impressao * {
+    visibility: visible;
+  }
+  html.manu-imprimir .manu-impressao {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    color: #000;
+    background: #fff;
+    font-size: 10pt;
+  }
+  .manu-impressao h1 {
+    font-size: 14pt;
+    margin: 0 0 4pt;
+  }
+  .manu-impressao h2 {
+    font-size: 11pt;
+    margin: 10pt 0 4pt;
+  }
+  .manu-impressao p {
+    margin: 0 0 4pt;
+  }
+  .manu-impressao table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .manu-impressao th,
+  .manu-impressao td {
+    padding: 2pt 4pt;
+    border: 0.5pt solid #999;
+    text-align: left;
+  }
+  .manu-impressao thead {
+    display: table-header-group;
+  }
+  .manu-impressao tr {
+    break-inside: avoid;
+  }
+  .manu-launcher {
+    display: none;
+  }
+}

@@ -55,9 +55,6 @@ services:
       ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       TRUST_PROXY: ${TRUST_PROXY:-1}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      COPILOTO_MODELO: ${COPILOTO_MODELO:-claude-sonnet-5-5}
-      COPILOTO_LIMITE_DIA: ${COPILOTO_LIMITE_DIA:-200}
     depends_on:
       migrate:
         condition: service_completed_successfully

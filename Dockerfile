@@ -20,6 +20,8 @@ COPY server/package*.json ./server/
 RUN cd server && npm ci --ignore-scripts --omit=dev --no-audit --no-fund
 COPY server ./server
 COPY --from=web /opt/biotrop/apps/web/dist ./apps/web/dist
+# Regras compartilhadas (CommonJS) que o servidor carrega: Manutinho (server/src/routes/manutinho.js).
+COPY --from=web /opt/biotrop/packages/shared/dist ./packages/shared/dist
 COPY database ./database
 USER node
 EXPOSE 3000

@@ -439,4 +439,5 @@ router.get('/sharepoint', async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.carregar = carregar;   // Manutinho (tanques em alerta/vencidos) reaproveita a leitura e o cálculo
 module.exports._test = { codigoTanque };

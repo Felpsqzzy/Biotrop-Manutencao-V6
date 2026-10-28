@@ -1271,7 +1271,7 @@ test('o terminal não abre o sistema principal: cookie do terminal recusado (401
     }
     const sse = await fetch(h.raiz + '/api/realtime', { headers: { cookie: t.cookie, 'x-forwarded-for': novoIp() } }); assert.equal(sse.status, 401); await sse.arrayBuffer();
     // quem tem o perfil terminal e entra no site (se um dia for autorizado) não recebe nenhum dado dos módulos de antes
-    for (const u of rotas.filter(x => !['/api/realtime', '/assets/modelos/prontuario-diafragmas-rev12.xlsx', '/api/conta/perfil', '/auth/me', '/api/copiloto/status'].includes(x))) {
+    for (const u of rotas.filter(x => !['/api/realtime', '/assets/modelos/prontuario-diafragmas-rev12.xlsx', '/api/conta/perfil', '/auth/me'].includes(x))) {
       const r = await painel(U.t1, 'GET', u);
       assert.ok([200, 400, 403].includes(r.s), `${u} → ${r.s}`);
       if (r.s === 200) {

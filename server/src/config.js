@@ -83,9 +83,5 @@ module.exports = Object.freeze({
   kmsProvedor: String(process.env.KMS_PROVEDOR || (production ? 'azure' : 'local')).toLowerCase(),
   azureKeyVaultKeyId: String(process.env.AZURE_KEYVAULT_KEY_ID || '').trim(),
   kekLocal: production ? '' : String(process.env.BIOMANUT_KEK_LOCAL || '').trim(),
-  criptoInquilino: String(process.env.CRIPTO_INQUILINO || 'biotrop').trim(),
-  // Copiloto BIOMANUT (rota /api/copiloto): chave da API do Claude, só no servidor. Sem ela o copiloto fica desligado (as demais telas não mudam).
-  copilotoChave: String(process.env.ANTHROPIC_API_KEY || '').trim(),
-  copilotoModelo: String(process.env.COPILOTO_MODELO || 'claude-sonnet-5-5').trim(),
-  copilotoLimiteDia: inteiro('COPILOTO_LIMITE_DIA', 200, 1, 5000)   // perguntas por pessoa por dia
+  criptoInquilino: String(process.env.CRIPTO_INQUILINO || 'biotrop').trim()
 });

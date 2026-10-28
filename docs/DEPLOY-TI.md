@@ -152,6 +152,8 @@ EMAIL_MOTIVOS_ATIVOS=sci_revisao_solicitante,lms_cobranca_gestor,lms_certificado
 
 `emprestimo_lembrete` (antes do prazo), `emprestimo_vencimento` (no vencimento), `emprestimo_atraso` (recorrente), `emprestimo_escalonamento` (atraso longo: almoxarifado, com os gestores em cópia) e `emprestimo_devolucao` (devolução conferida; desligada por padrão no painel). Ensaie antes com `EMAIL_DRY_RUN=1` (lê a fila sem enviar). Prazos e liga/desliga ficam no painel (Configuração).
 
+**Manutinho (assistente sem IA, substitui o Copiloto).** Não tem chave nem variável: lê o banco na sessão de quem usa (RLS) e aplica as regras de `packages/shared/src/manutinho` (o servidor carrega a saída CommonJS do pacote, `packages/shared/dist/cjs`, gerada no build). A cobrança manual de treinamento (`POST /api/manutinho/cobrar`) continua usando a função `lms.copiloto_cobrar` da migration 39 e o motivo `copiloto_cobranca` (nomes mantidos: a V5 usa o mesmo banco), que precisa estar em `EMAIL_MOTIVOS_ATIVOS`. As variáveis `ANTHROPIC_API_KEY`, `COPILOTO_MODELO` e `COPILOTO_LIMITE_DIA` saíram: podem ser apagadas do `.env`. Atualização da tela: a cada 60 s com a aba visível (sem realtime próprio na fase 1).
+
 **Rede (nginx).** O `deploy/nginx/biotrop.conf` só deixa `/terminal` e `/api/terminal` para as faixas do bloco `geo $biotrop_terminal_rede` (no topo do arquivo); de fora, 403 antes de chegar ao Node. Sem isso, qualquer pessoa na internet poderia testar senhas em matrículas sequenciais e travar de propósito a matrícula de outra pessoa (5 erros = bloqueio). O padrão são as faixas privadas (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) e `127.0.0.1`:
 
 - troque pela faixa da rede do almoxarifado ou pelo IP fixo do tablet (reserva de DHCP);

@@ -104,7 +104,7 @@ app.use('/api/terminal', require('./routes/terminal'));   // sessão própria (c
 app.use('/api/admin/simulacao', require('./routes/simulacao'));
 app.use('/api/realtime', require('./routes/realtime'));
 app.use('/api/lms', require('./routes/lms'));
-app.use('/api/copiloto', require('./routes/copiloto'));
+app.use('/api/manutinho', require('./routes/manutinho'));
 app.use('/api/conta/2fa', require('./routes/twofa'));
 app.use('/api/conta', require('./routes/account'));
 

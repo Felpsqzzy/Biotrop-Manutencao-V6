@@ -615,4 +615,5 @@ router.get('/relatorio', handle(async (req, res) => {
 }));
 
 module.exports = router;
+module.exports.ULTIMO_SQL = ULTIMO_SQL;   // Manutinho (válvulas críticas) usa a mesma regra de vida
 module.exports._test = { clean, date, vida, trocado, gestao, equipe, GESTAO, EQUIPE };
