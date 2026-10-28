@@ -1,0 +1,64 @@
+[Unit]
+Description=BIOTROP Plataforma de Manutencao (site)
+Documentation=file:///opt/biotrop/deploy/systemd/README.md
+# Banco no Azure (Flexible Server): não há postgresql.service local; basta a rede estar no ar.
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=biotrop
+Group=biotrop
+WorkingDirectory=/opt/biotrop
+# Arquivo exclusivo do site (root:biotrop 0640). Nunca inclua DATABASE_ADMIN_URL, credenciais do
+# worker nem segredos GRAPH_* — veja deploy/systemd/README.md.
+EnvironmentFile=/opt/biotrop/.env.app
+# Valores fixos de segurança. Atenção: variáveis do EnvironmentFile têm PRIORIDADE sobre
+# Environment=; o .env.app deve trazer os mesmos valores (ou não trazer estas variáveis).
+Environment=NODE_ENV=production
+# O Node escuta só no loopback; quem fala com a internet é o nginx.
+Environment=HOST=127.0.0.1
+# Pool de threads do libuv (padrão 4): o scrypt do terminal ocupa até 2 (semáforo em lib/senha-terminal.js); com 8,
+# sobra folga para arquivo, DNS, zlib e crypto do resto do site enquanto há logins no tablet.
+Environment=UV_THREADPOOL_SIZE=8
+ExecStart=/usr/bin/node /opt/biotrop/server/src/index.js
+Restart=always
+RestartSec=5
+UMask=0077
+
+# ---- Endurecimento (confira com: systemd-analyze security biotrop.service) ----
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+# Código em /opt/biotrop é do root e fica somente leitura; só os logs são graváveis.
+ReadWritePaths=/opt/biotrop/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RemoveIPC=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# Chamada fora da lista devolve erro em vez de matar o processo (o libuv testa io_uring e cai
+# para o pool de threads quando recebe EPERM).
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute NÃO é usado de propósito: o JIT do V8 precisa de páginas W+X.
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

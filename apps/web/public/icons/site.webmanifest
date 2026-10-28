@@ -1,0 +1,12 @@
+{
+  "name": "BIOTROP · Plataforma de Manutenção",
+  "short_name": "BIOTROP",
+  "icons": [
+    { "src": "./android-chrome-192x192.png?v=20261007", "sizes": "192x192", "type": "image/png" },
+    { "src": "./android-chrome-512x512.png?v=20261007", "sizes": "512x512", "type": "image/png" }
+  ],
+  "start_url": "/",
+  "theme_color": "#00634e",
+  "background_color": "#eef5f2",
+  "display": "standalone"
+}

@@ -1,0 +1,10 @@
+# Fim de linha LF no repositório e na cópia de trabalho, qualquer que seja o core.autocrlf da máquina: as migrations
+# e os testes de contrato leem os arquivos crus (regex com \n), e o Windows com autocrlf=true os entregava com \r\n.
+*.sql  text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf

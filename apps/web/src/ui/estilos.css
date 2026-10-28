@@ -1,0 +1,97 @@
+/* Ponto único de estilos do app: Tailwind v4 + tokens + base. Classes próprias levam o prefixo bm- (nunca nomes
+   genéricos do tipo card); classes de módulo levam o prefixo do módulo. */
+@import 'tailwindcss';
+@import './tokens.css';
+
+@theme inline {
+  --color-bm-bg: var(--bm-bg);
+  --color-bm-surface: var(--bm-surface);
+  --color-bm-ink: var(--bm-ink);
+  --color-bm-ink-2: var(--bm-ink-2);
+  --color-bm-ink-3: var(--bm-ink-3);
+  --color-bm-line: var(--bm-line);
+  --color-bm-accent: var(--bm-accent);
+  --color-bm-accent-fill: var(--bm-accent-fill);
+  --color-bm-on-accent: var(--bm-on-accent);
+  --color-bm-violet: var(--bm-violet);
+  --color-bm-blue: var(--bm-blue);
+  --color-bm-cyan: var(--bm-cyan);
+  --color-bm-pink: var(--bm-pink);
+  --font-bm: var(--bm-font);
+}
+
+html {
+  background: var(--bm-bg);
+}
+body {
+  margin: 0;
+  color: var(--bm-ink);
+  font-family: var(--bm-font);
+  -webkit-font-smoothing: antialiased;
+}
+/* luz ambiente numa camada fixa e parada (nada de background-attachment:fixed nem animação) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--bm-ambient), var(--bm-bg);
+  pointer-events: none;
+}
+:focus-visible {
+  outline: 3px solid var(--bm-focus);
+  outline-offset: 2px;
+}
+
+/* vidro: SÓ nas superfícies fixas (menu, topo, gaveta, Manutinho, diálogo e um painel por tela) */
+.bm-vidro {
+  background: var(--bm-glass);
+  -webkit-backdrop-filter: var(--bm-blur);
+  backdrop-filter: var(--bm-blur);
+  border: 1px solid var(--bm-glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--bm-highlight),
+    var(--bm-shadow-1);
+}
+/* painel comum (vale para item repetido): cor cheia com brilho na borda, SEM desfoque */
+.bm-painel {
+  background: var(--bm-panel), var(--bm-surface);
+  border: 1px solid var(--bm-line);
+  border-radius: var(--bm-r-card);
+  box-shadow:
+    inset 0 1px 0 var(--bm-highlight),
+    var(--bm-shadow-1);
+}
+.bm-botao {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bm-s2);
+  min-height: 40px;
+  padding: 0 var(--bm-s4);
+  border-radius: var(--bm-r-ctl);
+  border: 1px solid var(--bm-line-strong);
+  background: var(--bm-field);
+  color: var(--bm-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform var(--bm-fast) var(--bm-ease),
+    opacity var(--bm-fast) var(--bm-ease);
+}
+.bm-botao:active {
+  transform: scale(0.98);
+}
+.bm-botao--acao {
+  background: var(--bm-accent-fill);
+  color: var(--bm-on-accent);
+  border-color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

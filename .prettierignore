@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+playwright-report
+server
+database
+apps/web/public

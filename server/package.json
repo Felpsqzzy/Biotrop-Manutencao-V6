@@ -1,0 +1,35 @@
+{
+  "name": "@biotrop/server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "db:migrate": "node src/db/migrate.js",
+    "db:check": "node src/db/check.js",
+    "test": "node --test test/*.test.js",
+    "test:integracao": "node --test --test-concurrency=1 test-integracao/*.test.js"
+  },
+  "dependencies": {
+    "@azure/identity": "4.13.3",
+    "@azure/keyvault-keys": "4.10.2",
+    "@azure/msal-node": "7.1.1",
+    "compression": "1.8.2",
+    "cookie-parser": "1.4.7",
+    "dotenv": "16.4.7",
+    "express": "4.22.3",
+    "helmet": "8.0.0",
+    "pg": "8.13.1",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.16"
+  },
+  "overrides": {
+    "@azure/msal-node": "$@azure/msal-node"
+  }
+}

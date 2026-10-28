@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix server --ignore-scripts --no-audit --no-fund
+      - run: npm run lint
+      # pacote compartilhado + testes dos workspaces (vitest) + unitários do servidor
+      - run: npm test
+      # servidor contra PostgreSQL de verdade em memória (PGlite), com todas as migrations e RLS
+      - run: npm run test:integracao
+      # os dois builds do front; cada um confere o dist (sem script inline, JS inicial no orçamento)
+      - run: npm run build:demo
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high

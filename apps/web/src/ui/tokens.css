@@ -1,0 +1,175 @@
+/* BIOMANUT V6 · tokens do sistema visual (--bm-*), portados da V5 (web/src/ui/bm-tokens.css + liquid-glass.css, dab3185).
+   Verde BIOTROP (--bm-accent / --bm-accent-fill) é a cor de ação; roxo, azul, ciano e rosa são apoio (gráficos,
+   destaques, luz ambiente). Tema claro em :root, escuro em [data-theme=dark] (public/theme-boot.js decide antes da
+   primeira pintura). Regras de desempenho do vidro: src/ui/README.md. */
+
+:root {
+  color-scheme: light;
+  /* espaço (4/8 px) */
+  --bm-s1: 4px;
+  --bm-s2: 8px;
+  --bm-s3: 12px;
+  --bm-s4: 16px;
+  --bm-s5: 20px;
+  --bm-s6: 24px;
+  --bm-s8: 32px;
+  --bm-s10: 40px;
+  --bm-gutter: 24px;
+  /* raios */
+  --bm-r-xs: 8px;
+  --bm-r-ctl: 12px;
+  --bm-r-card: 18px;
+  --bm-r-lg: 22px;
+  --bm-r-pill: 999px;
+  /* movimento: só transform/opacity, de 150 a 250 ms */
+  --bm-fast: 150ms;
+  --bm-med: 200ms;
+  --bm-slow: 250ms;
+  --bm-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* estrutura */
+  --bm-side: 240px;
+  --bm-rail: 72px;
+  --bm-top: 64px;
+  --bm-font:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, system-ui, sans-serif;
+
+  /* apoio */
+  --bm-violet: #7c4dff;
+  --bm-blue: #2563eb;
+  --bm-cyan: #0891b2;
+  --bm-pink: #db2777;
+  --bm-violet-soft: rgb(124 77 255 / 12%);
+  --bm-blue-soft: rgb(37 99 235 / 10%);
+  --bm-cyan-soft: rgb(8 145 178 / 12%);
+  --bm-pink-soft: rgb(219 39 119 / 11%);
+
+  /* superfícies e texto */
+  --bm-bg: #eef0f5;
+  --bm-surface: #ffffff;
+  --bm-surface-2: #f4f5f9;
+  --bm-surface-3: #e9ebf2;
+  --bm-line: rgb(20 24 40 / 9%);
+  --bm-line-strong: rgb(20 24 40 / 16%);
+  --bm-ink: #141822;
+  --bm-ink-2: #454c5c;
+  --bm-ink-3: #5d6474; /* 5,5:1 sobre o vidro claro (AA) */
+
+  /* ação (verde BIOTROP) */
+  --bm-accent: #00734f; /* texto/ícone verde: 4,6:1 mesmo sobre a luz roxa */
+  --bm-accent-fill: #00845d; /* fundo do botão principal */
+  --bm-on-accent: #ffffff;
+  --bm-accent-soft: rgb(0 132 93 / 10%);
+  --bm-accent-line: rgb(0 132 93 / 28%);
+  --bm-focus: rgb(0 132 93 / 45%);
+
+  /* estados */
+  --bm-ok: #14804f;
+  --bm-ok-soft: rgb(20 128 79 / 11%);
+  --bm-info: #2459c4;
+  --bm-info-soft: rgb(36 89 196 / 10%);
+  --bm-warn: #b25e00;
+  --bm-warn-soft: rgb(214 120 10 / 13%);
+  --bm-alert: #8a6a00;
+  --bm-alert-soft: rgb(214 170 10 / 16%);
+  --bm-bad: #c2313b;
+  --bm-bad-soft: rgb(194 49 59 / 10%);
+
+  /* sombras */
+  --bm-shadow-1: 0 1px 2px rgb(20 24 40 / 5%), 0 8px 24px -14px rgb(20 24 40 / 18%);
+  --bm-shadow-2: 0 2px 6px rgb(20 24 40 / 6%), 0 24px 60px -24px rgb(20 24 40 / 30%);
+  --bm-lift: 0 2px 6px rgb(20 24 40 / 6%), 0 18px 38px -16px rgb(20 24 40 / 26%);
+
+  /* vidro (backdrop-filter só nas superfícies fixas: ver README) */
+  --bm-blur: blur(24px) saturate(170%);
+  --bm-glass: rgb(255 255 255 / 62%);
+  --bm-glass-modal: rgb(255 255 255 / 80%);
+  --bm-glass-edge: rgb(255 255 255 / 70%);
+  --bm-panel: linear-gradient(180deg, rgb(255 255 255 / 80%) 0%, rgb(255 255 255 / 62%) 100%);
+  --bm-highlight: rgb(255 255 255 / 95%);
+  --bm-field: rgb(255 255 255 / 72%);
+  --bm-hover: rgb(20 24 40 / 5%);
+  /* luz ambiente parada (camada fixa, nunca animada) */
+  --bm-ambient:
+    radial-gradient(900px 620px at 8% -8%, rgb(124 77 255 / 13%), transparent 62%),
+    radial-gradient(820px 560px at 92% 4%, rgb(37 99 235 / 10%), transparent 60%),
+    radial-gradient(760px 560px at 78% 98%, rgb(8 145 178 / 11%), transparent 62%),
+    radial-gradient(700px 520px at 10% 92%, rgb(219 39 119 / 8%), transparent 60%);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bm-violet: #a78bfa;
+  --bm-blue: #7ea8ff;
+  --bm-cyan: #67e8f9;
+  --bm-pink: #f472b6;
+  --bm-violet-soft: rgb(167 139 250 / 16%);
+  --bm-blue-soft: rgb(126 168 255 / 13%);
+  --bm-cyan-soft: rgb(103 232 249 / 13%);
+  --bm-pink-soft: rgb(244 114 182 / 14%);
+
+  --bm-bg: #0a0b10;
+  --bm-surface: #15171f; /* opaco: selects, listas suspensas e cabeçalhos fixos de tabela */
+  --bm-surface-2: #1a1d26;
+  --bm-surface-3: #232733;
+  --bm-line: rgb(255 255 255 / 9%);
+  --bm-line-strong: rgb(255 255 255 / 15%);
+  --bm-ink: #f3f5f8;
+  --bm-ink-2: #b6bcc8;
+  --bm-ink-3: #8f96a4; /* 4,8:1 mesmo sobre a luz roxa (AA) */
+
+  --bm-accent: #2fcf95;
+  --bm-accent-fill: #00b981;
+  --bm-on-accent: #03150e;
+  --bm-accent-soft: rgb(0 185 129 / 13%);
+  --bm-accent-line: rgb(0 185 129 / 34%);
+  --bm-focus: rgb(0 185 129 / 55%);
+
+  --bm-ok: #43cf8e;
+  --bm-ok-soft: rgb(67 207 142 / 13%);
+  --bm-info: #7ea8ff;
+  --bm-info-soft: rgb(126 168 255 / 13%);
+  --bm-warn: #f2a54a;
+  --bm-warn-soft: rgb(242 165 74 / 14%);
+  --bm-alert: #e9c94f;
+  --bm-alert-soft: rgb(233 201 79 / 14%);
+  --bm-bad: #f2737b;
+  --bm-bad-soft: rgb(242 115 123 / 13%);
+
+  --bm-shadow-1: 0 1px 2px rgb(0 0 0 / 35%), 0 10px 30px -16px rgb(0 0 0 / 60%);
+  --bm-shadow-2: 0 2px 8px rgb(0 0 0 / 35%), 0 30px 70px -24px rgb(0 0 0 / 75%);
+  --bm-lift: 0 2px 8px rgb(0 0 0 / 35%), 0 22px 44px -18px rgb(0 0 0 / 70%);
+
+  --bm-glass: linear-gradient(180deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 4%)), rgb(10 11 16 / 46%);
+  --bm-glass-modal: rgb(24 26 36 / 78%);
+  --bm-glass-edge: rgb(255 255 255 / 12%);
+  --bm-panel: linear-gradient(180deg, rgb(255 255 255 / 9%) 0%, rgb(255 255 255 / 5%) 100%);
+  --bm-highlight: rgb(255 255 255 / 14%);
+  --bm-field: rgb(255 255 255 / 6%);
+  --bm-hover: rgb(255 255 255 / 6%);
+  --bm-ambient:
+    radial-gradient(900px 640px at 6% -10%, rgb(124 77 255 / 30%), transparent 62%),
+    radial-gradient(820px 600px at 96% 0%, rgb(37 99 235 / 24%), transparent 60%),
+    radial-gradient(780px 600px at 82% 100%, rgb(6 182 212 / 20%), transparent 62%),
+    radial-gradient(720px 560px at 8% 96%, rgb(236 72 153 / 18%), transparent 60%);
+}
+
+/* Sem suporte a backdrop-filter, ou com "reduzir transparência": o vidro vira cor sólida. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --bm-glass: rgb(255 255 255 / 96%);
+    --bm-glass-modal: #ffffff;
+  }
+  [data-theme='dark'] {
+    --bm-glass: #12141b;
+    --bm-glass-modal: #181a23;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --bm-blur: none;
+    --bm-glass: rgb(255 255 255 / 96%);
+  }
+  [data-theme='dark'] {
+    --bm-glass: #12141b;
+  }
+}

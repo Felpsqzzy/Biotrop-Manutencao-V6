@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: biotrop
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - biotrop_postgres:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d biotrop"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD}
+      DATABASE_SSL: ${DATABASE_SSL:-true}
+      DATABASE_SSL_CA: ${DATABASE_SSL_CA:?Configure a CA PostgreSQL}
+    command: ["node","server/src/db/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+    restart: "no"
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      KMS_PROVEDOR: azure
+      AZURE_KEYVAULT_KEY_ID: ${AZURE_KEYVAULT_KEY_ID:?Configure a chave Azure Key Vault}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      CRIPTO_INQUILINO: ${CRIPTO_INQUILINO:-biotrop}
+      APP_BASE_URL: ${APP_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SSL: ${DATABASE_SSL:-true}
+      DATABASE_SSL_CA: ${DATABASE_SSL_CA:?Configure a CA PostgreSQL}
+      DB_POOL_MAX: ${DB_POOL_MAX:-20}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_HOURS: ${SESSION_HOURS:-10}
+      TWOFA_KEY: ${TWOFA_KEY}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COPILOTO_MODELO: ${COPILOTO_MODELO:-claude-sonnet-5-5}
+      COPILOTO_LIMITE_DIA: ${COPILOTO_LIMITE_DIA:-200}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)})\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  email-worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_WORKER_URL: ${DATABASE_WORKER_URL}
+      DATABASE_SSL: ${DATABASE_SSL:-true}
+      DATABASE_SSL_CA: ${DATABASE_SSL_CA:?Configure a CA PostgreSQL}
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID}
+      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET}
+      EMAIL_REMETENTE: ${EMAIL_REMETENTE}
+      EMAIL_MOTIVOS_ATIVOS: ${EMAIL_MOTIVOS_ATIVOS}
+      EMAIL_INTERVALO_MS: ${EMAIL_INTERVALO_MS:-60000}
+      EMAIL_LOTE: ${EMAIL_LOTE:-20}
+      EMAIL_TENTATIVAS_MAX: ${EMAIL_TENTATIVAS_MAX:-5}
+      EMAIL_TIMEOUT_MS: ${EMAIL_TIMEOUT_MS:-15000}
+      EMAIL_DRY_RUN: ${EMAIL_DRY_RUN:-1}
+    command: ["node","server/src/worker-email.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  biotrop_postgres:

@@ -1,0 +1,31 @@
+# Dependências e saídas de build
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Segredos: nunca no repositório (só os exemplos)
+.env
+.env.*
+!.env.example
+!.env.app.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+credentials*.json
+secrets*.json
+
+# Operação local
+backups/
+logs/
+*.log
+.DS_Store
+.idea/
+.vscode/
+.claude/*
+!.claude/agents/

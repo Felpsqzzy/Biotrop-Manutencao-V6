@@ -1,0 +1,29 @@
+{
+  "name": "biomanut-v6",
+  "private": true,
+  "version": "6.0.0",
+  "engines": { "node": ">=22.12" },
+  "workspaces": ["packages/shared", "apps/web"],
+  "scripts": {
+    "dev": "npm run build -w @biomanut/shared && npm run dev -w @biomanut/web",
+    "build": "npm run build -w @biomanut/shared && npm run build -w @biomanut/web",
+    "build:demo": "npm run build -w @biomanut/shared && npm run build:demo -w @biomanut/web",
+    "test": "npm run build -w @biomanut/shared && npm test --workspaces && npm --prefix server test",
+    "test:integracao": "npm --prefix server run test:integracao",
+    "lint": "eslint . && prettier --check \"apps/web/src/**/*.{ts,tsx,css}\" \"packages/shared/src/**/*.ts\"",
+    "format": "prettier --write \"apps/web/src/**/*.{ts,tsx,css}\" \"packages/shared/src/**/*.ts\"",
+    "install:server": "npm --prefix server ci --ignore-scripts --no-audit --no-fund",
+    "start": "npm --prefix server start",
+    "db:migrate": "npm --prefix server run db:migrate",
+    "db:check": "npm --prefix server run db:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1"
+  }
+}
