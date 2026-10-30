@@ -1,8 +1,8 @@
 # Ferramentas, empréstimos e terminal do Almoxarifado — diagnóstico, plano e relatório das fases
 
-Data: 09/10/2026 (fases 1 a 3) e 16/10/2026 (fases 4 a 7). Diagnóstico (Fase 1), plano técnico (Fase 2), decisões (seção 5), relatório da Fase 3 (seção 6) e das fases 4 a 7, com a implantação (seção 7).
+Data: 09/10/2026 (fases 1 a 3), 16/10/2026 (fases 4 a 7) e 29/10/2026 (V6). Diagnóstico (Fase 1), plano técnico (Fase 2), decisões (seção 5), relatório da Fase 3 (seção 6), das fases 4 a 7, com a implantação (seção 7), e o terminal React da V6 com Empréstimo × Retirada (seção 8).
 
-Repositório real: `Felpsqzzy/Biotrop-Manutencao-VM` (o texto do pedido cita `V3-Base`, que é uma versão antiga e não é a base deste trabalho). Última migration existente: `39`; as novas começam em `40`.
+Repositório real: `Felpsqzzy/Biotrop-Manutencao-VM` (o texto do pedido cita `V3-Base`, que é uma versão antiga e não é a base deste trabalho). Última migration existente: `39`; as novas começam em `40` (na V6 vão até a `44`, seção 8).
 
 ## 1. O que os dois formulários dizem de verdade
 
@@ -152,7 +152,7 @@ Cada fase termina com: arquivos alterados, migrations, o que foi executado e val
 **API**
 - `/api/terminal/*` (`server/src/routes/terminal.js`, `auth/terminal-sessao.js`, `middleware/terminal.js`, `lib/senha-terminal.js`): entrar, primeiro acesso, sair, eu, ferramentas (com foto), empréstimos do próprio colaborador, retirada, devolução e saída administrativa. Cookie, chave HKDF e middleware próprios: o cookie do site não vale aqui e vice-versa.
 - `/api/emprestimo/*` (`routes/emprestimo.js`): colaboradores com a situação do acesso, convite, bloqueio e desbloqueio, foto da ferramenta. `/api/emprestimo/avisos/*` (`routes/emprestimo-avisos.js`): configuração e lista dos avisos.
-  - **Pedem step-up 2FA (desde 27/10/2026; 403 `precisa2fa`, e `configurar2fa` para quem não tem 2FA):** `POST /ferramentas`, `PUT /ferramentas/:id`, `POST /ferramentas/:id/ajustes`, `PUT /config`, `POST /colaboradores`, `POST /colaboradores/:id/convite`, `POST /colaboradores/:id/acesso` **só ao liberar** (`bloqueado: false`) e `PUT /avisos/config`. Bloquear o acesso continua imediato, sem step-up. Leituras (GET), retirada, devolução, conferência, baixa, prazo, estorno, unidades individuais (`POST /ferramentas/:id/unidades`) e a foto não pedem.
+  - **Pedem step-up 2FA (desde 27/10/2026; 403 `precisa2fa`, e `configurar2fa` para quem não tem 2FA):** `POST /ferramentas`, `PUT /ferramentas/:id`, `POST /ferramentas/:id/ajustes`, `PUT /config`, `POST /colaboradores`, `POST /colaboradores/:id/convite`, `POST /colaboradores/:id/acesso` **só ao liberar** (`bloqueado: false`) e `PUT /avisos/config`. Bloquear o acesso continua imediato, sem step-up. Leituras (GET), retirada, devolução, conferência, baixa, prazo, estorno, unidades individuais (`POST /ferramentas/:id/unidades`) e a foto não pedem. Na V6 a importação (`POST /ferramentas/importar`) também pede (seção 8).
 - `server/src/app.js`: limites próprios do terminal e do painel, `GET /terminal` antes do coringa do `index.html`, 413 para corpo acima de 2 MB e 400 para JSON malformado.
 
 **Como ficou (decisões)**
@@ -160,10 +160,10 @@ Cada fase termina com: arquivos alterados, migrations, o que foi executado e val
 - Mesma resposta para matrícula inexistente, senha errada, bloqueado, inativo e sem senha. Bloqueio por matrícula (5 erros: 5 min, depois 15 min, depois 1 h) e por aparelho (30 erros em 15 min). Inatividade da configuração e validade absoluta de 30 min.
 - O terminal só empresta ferramenta; material do catálogo MAN segue no balcão (painel).
 - Saída administrativa escondida (segurar o logotipo 3 s ou Ctrl+Alt+Shift+S): senha do terminal **e** código do autenticador (2FA do site) de admin, gestor ou almoxarife.
-- Demonstração sem servidor (`?demo=1` e prévia da Vercel): `web/src/almox/emprestimo-demo.js`, com pessoas e senhas fictícias. Não vai para o pacote da VM (`scripts/build-vm.js`).
+- Demonstração sem servidor (`?demo=1` e prévia da Vercel): `web/src/almox/emprestimo-demo.js`, com pessoas e senhas fictícias. Não vai para o pacote da VM (`scripts/build-vm.js`). Na V6: `apps/web/src/terminal/demo.ts` (seção 8).
 
 **Regras acertadas na revisão (rodada 1, 16-17/10/2026)** — valem na API, no banco e no demo (a paridade compara os dois)
-- Senha do terminal: o mínimo de 8 caracteres conta a senha como ela é gravada (NFKC). Todo login calcula um scrypt de cada custo de hash em uso, para matrícula inexistente e hash de custo antigo levarem o mesmo tempo; o limite do aparelho (30 erros em 15 min) é reservado antes do scrypt, então pedidos simultâneos também param em 30.
+- Senha do terminal: o mínimo de 8 caracteres conta a senha como ela é gravada (NFKC). Na V6 virou PIN de 6 dígitos (seção 8). Todo login calcula um scrypt de cada custo de hash em uso, para matrícula inexistente e hash de custo antigo levarem o mesmo tempo; o limite do aparelho (30 erros em 15 min) é reservado antes do scrypt, então pedidos simultâneos também param em 30.
 - Matrícula única **sem diferenciar maiúsculas** (`T1001` = `t1001`), gravada como foi digitada; login, primeiro acesso e o filtro `?matricula=` também.
 - Cadastro de colaborador com conta de admin ou gestor (editar inclusive) só pela gerência: o banco recusa com 403 e o painel nem mostra "Editar" na linha. Editar sem mandar `ativo` mantém a situação; `ativo` aceita só true/false.
 - Auditoria da edição de ferramenta e de colaborador grava o antes e o depois de cada campo (`detalhe.alteracoes`); a ficha da ferramenta mostra "campo: de → para".
@@ -174,9 +174,9 @@ Cada fase termina com: arquivos alterados, migrations, o que foi executado e val
 - Avisos por e-mail: colaborador com o cadastro do terminal desligado no painel **ou** usuário do site inativo fica "pulado" ("Colaborador inativo"); o escalonamento continua indo ao almoxarifado. A janela do atraso é o número de ordem do atraso naquele prazo: mudar o intervalo no meio do caminho não cala o aviso (o próximo sai um intervalo depois do último).
 - `entrar`, `primeiro-acesso` e `GET /eu` do terminal devolvem `prazoPadraoHoras` (o da configuração).
 
-**Telas**: `web/terminal.html` + `web/src/terminal/terminal.js|css` (tablet); `web/src/almox/emprestimo.js|css` (painel, menu Almoxarifado › Ferramentas e empréstimos, `web/src/ui/menu.js`).
+**Telas**: `web/terminal.html` + `web/src/terminal/terminal.js|css` (tablet); `web/src/almox/emprestimo.js|css` (painel, menu Almoxarifado › Ferramentas e empréstimos, `web/src/ui/menu.js`). Na V6 o tablet é `apps/web/terminal.html` + `apps/web/src/terminal/*.tsx` (seção 8).
 
-**Testes**: unidade `server/test/emprestimo-*.test.js` e `terminal-*.test.js`; integração (PGlite, RLS ligado) `server/test-integracao/emprestimo.test.js`, `terminal.test.js`, `emprestimo-avisos.test.js`, `emprestimo-foto.test.js`, `emprestimo-paridade.test.js` (a mesma sequência na API e no demo) e `emprestimo-cobertura.test.js`.
+**Testes**: unidade `server/test/emprestimo-*.test.js` e `terminal-*.test.js`; integração (PGlite, RLS ligado) `server/test-integracao/emprestimo.test.js`, `terminal.test.js`, `emprestimo-avisos.test.js`, `emprestimo-foto.test.js`, `emprestimo-paridade.test.js` (a mesma sequência na API e no demo) e `emprestimo-cobertura.test.js`. Na V6 não há `emprestimo-paridade.test.js`; entra `emprestimo-retirada.test.js` (seção 8).
 
 **Implantação** (passo a passo em `docs/DEPLOY-TI.md`, seção 9)
 - Variável nova `TERMINAL_SCRYPT_LOG2N` (opcional, padrão 17; a produção recusa menos). Cerca de 128 MiB de RAM por login simultâneo. Depois de subir o valor, enquanto houver senha gravada no custo antigo, cada login calcula os dois custos (mais lento e mais memória): gere convite de redefinição para quem não entrou depois da troca.
@@ -184,10 +184,48 @@ Cada fase termina com: arquivos alterados, migrations, o que foi executado e val
 - `EMAIL_MOTIVOS_ATIVOS` do worker com `emprestimo_lembrete`, `emprestimo_vencimento`, `emprestimo_atraso`, `emprestimo_escalonamento` e `emprestimo_devolucao`. Os avisos vêm ligados: sem os motivos, o worker cancela todos.
 - nginx: `/terminal` e `/api/terminal` só da rede do almoxarifado (`geo $biotrop_terminal_rede` em `deploy/nginx/biotrop.conf`); de fora, 403.
 - Tablet em modo quiosque, com o gerenciador de senhas e o preenchimento automático do navegador desligados (`PasswordManagerEnabled=false`).
-- `web/terminal.html` carrega os arquivos com `?v=N`: subir o número quando o arquivo mudar (o estático fica 1 h em cache na VM). Parado na tela inicial, o tablet relê `/terminal` a cada 5 min e recarrega sozinho quando o `?v=` muda (em até uns 6 min depois do deploy).
+- `web/terminal.html` carrega os arquivos com `?v=N`: subir o número quando o arquivo mudar (o estático fica 1 h em cache na VM). Parado na tela inicial, o tablet relê `/terminal` a cada 5 min e recarrega sozinho quando o `?v=` muda (em até uns 6 min depois do deploy). Na V6 não há `?v=`: `versao.ts` compara os `/assets/` com hash (seção 8).
 - O tablet recusa matrícula e senha preenchidas pelo navegador (`:autofill`): limpa os campos e pede para digitar.
 
 **Pendências**
 - Conferir no tablet físico: modo quiosque, política do navegador (sem "Salvar senha?") e a saída administrativa.
 - Repetir em PostgreSQL real, com duas sessões, a disputa pela última unidade (o PGlite dos testes tem uma conexão só).
 - Conferir com o almoxarifado qual revisão do REG.0306/REG.0305 vale (cabeçalho × nome do arquivo).
+
+## 8. V6 — terminal React, Empréstimo × Retirada (29/10/2026)
+
+Branch `feat/terminal-emprestimo-retirada` (commit de 30/10/2026), com o kit visual `apps/web/src/ui`, de que o terminal depende.
+
+**Migrations**: `40` a `44`. A nova é `44-emprestimo-retirada.sql`:
+- `emprestimo.modalidade` (`emprestimo` | `retirada`), status `aguardando_baixa` (só retirada), `prazo` nulo só na retirada; tudo por `CHECK`, refeito a cada deploy (DROP IF EXISTS + ADD).
+- Ferramenta com `retiravel`, `codigo_compra` (≤ 60) e `patrimonio` (≤ 80).
+- Regras em `emprestimo.executar()` da 40: ações `retirada_confirmar`, `retirada_recusar` e `ferramentas_importar`; `emprestar` aceita `modalidade`.
+
+**Retirada (RM)**
+- Só ferramenta `retiravel`, nunca material. Nasce `aguardando_baixa` (disponível → emprestada), sem prazo.
+- `POST /api/emprestimo/emprestimos/:id/retirada {acao, numeroBaixa?, justificativa?, chave?}`: confirmar → baixada, `encerrado` (nº da baixa opcional); recusar → volta ao disponível, `estornado` (justificativa de 5+ caracteres).
+- Devolução, conferência, baixa avulsa, novo prazo e estorno recusam retirada.
+- Sem prazo: nunca "atrasada" e sem avisos por e-mail (a 42 só olha os status do empréstimo).
+- `GET /api/emprestimo/emprestimos?modalidade=emprestimo|retirada`.
+
+**Importação**: `POST /api/emprestimo/ferramentas/importar {linhas}`, de 1 a 1000 linhas, com step-up 2FA da gestão. Linha inválida = 400 "Linha N: …" e nada gravado; código que já existe ou se repete é ignorado (`ignoradas`).
+
+**PIN do terminal** (`server/src/lib/senha-terminal.js`, `validarSenha`): exatamente 6 dígitos, nem todos iguais, sem sequência (123456, 654321), diferente dos 6 últimos dígitos da matrícula. Vale ao definir (primeiro acesso e redefinição); o login ainda aceita a senha antiga até a redefinição. O PIN entra só pelo teclado numérico da tela (`teclado.tsx`: campo readonly, `inputMode="none"`).
+
+**Telas**: `apps/web/terminal.html` + `apps/web/src/terminal/*.tsx` (React; Motion com `LazyMotion` + `domAnimation` e o componente `m`).
+- Após o login, dois cartões: Empréstimo × Retirada (`Modulos.tsx`); troca pelo topo sem sair.
+- Catálogo único (`Catalogo.tsx`), alternável cartões ↔ lista (lembrado no navegador). Botão "Separar": por quantidade vira contador (− n +); item por unidade abre a folha da etiqueta. Não há divisão visível quantidade × patrimônio.
+- Bandeja fixa "N itens separados · Revisar" (sem "carrinho"). Durante o envio, nada de Voltar, "Separar mais" ou troca de módulo.
+- `GET /api/terminal/ferramentas?modalidade=retirada` filtra as retiráveis no servidor; até 1000, com `cortado: true` acima disso. `codigoCompra` e `patrimonio` não vão ao tablet.
+- Listas com mais de 100 linhas virtualizadas (`@tanstack/react-virtual`, catálogo e Meus).
+- Vidro só nas superfícies fixas; no login, sem blur sobre o fundo animado.
+
+**Atualização do tablet**: `apps/web/src/terminal/versao.ts`. Parado na tela inicial, relê o HTML, compara os `/assets/` com hash; mudou, espera e recarrega uma vez por versão (sem laço). Substitui o `?v=N`.
+
+**Demo**: `apps/web/src/terminal/demo.ts`, carregado por `import()` só no build demo (fora dele não entra no pacote).
+
+**Testes** (30/10/2026, só os arquivos deste commit, numa cópia limpa): web 55 (51 + 4 que só rodam depois do build), shared 27, server 167, integração 256. Integração nova: `server/test-integracao/emprestimo-retirada.test.js`.
+
+**Pendências**
+- O teste de orçamento (`apps/web/test/dist-sem-inline.test.ts`) só mede o `index.html`. O terminal foi medido à mão: 119,5 KB gzip.
+- Conferir no tablet físico.

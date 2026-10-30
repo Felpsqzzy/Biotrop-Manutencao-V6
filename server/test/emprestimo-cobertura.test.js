@@ -22,34 +22,19 @@ const ler = rel => fs.readFileSync(path.join(RAIZ, rel), 'utf8');
 const UID = '0b9d2c1e-1111-4222-8333-944455556666';
 
 /* ---------------------------------------------------------------- regra da senha */
-test('senha: 8 a 128 caracteres; matrícula, repetição, sequência (também de teclado e ao contrário) e senha comum recusadas; letras maiúsculas e espaços nas pontas contam', () => {
+test('PIN: exatamente 6 dígitos; nem todos iguais, nem sequência (crescente ou decrescente), nem os 6 últimos dígitos da matrícula', () => {
   const ruim = (senha, matricula, trecho) => { const r = s.validarSenha(senha, matricula); assert.ok(r && r.includes(trecho), `${JSON.stringify(senha)} → ${r}`); };
   const boa = (senha, matricula = '') => assert.equal(s.validarSenha(senha, matricula), null, JSON.stringify(senha));
-  for (const v of [undefined, null, 12345678, ['Furadeira#Azul7'], {}, '', '1234567', 'a b c d']) ruim(v, '', '8 caracteres');
-  ruim('x'.repeat(129), '', 'no máximo 128');
-  boa('Aa1!'.repeat(32));   // 128
-  ruim('Aa1!'.repeat(32) + 'x', '', 'no máximo 128');
-  boa('Furadeira#Azul7'); boa('  Furadeira#Azul7  '); boa('minha frase de senha bem longa');
-  ruim('１２３４５６７８', '', 'sequência');            // dígitos de largura total viram 12345678
-  ruim('ａｂｃｄｅｆｇｈ', '', 'sequência');
-  ruim('        ', '', 'repetido');                     // só espaços
-  ruim('abababab', '', 'repetido'); ruim('AAAAAAAA', '', 'repetido'); ruim('12121212', '', 'repetido');
-  ruim('Abcdefgh', '', 'sequência'); ruim('QWERTYUI', '', 'sequência'); ruim('poiuytre', '', 'sequência'); ruim('87654321', '', 'sequência'); ruim('zyxwvuts', '', 'sequência'); ruim('asdfghjk', '', 'sequência');
-  ruim('Password1', '', 'muito comum'); ruim('SENHA123', '', 'muito comum'); ruim('Biotrop2026', '', 'muito comum');
-  ruim('810001', '810001', '8 caracteres'); ruim('81000100', '810001', 'matrícula'); ruim('x810001y', '810001', 'matrícula'); ruim('XL81001X', 'l81001', 'matrícula');
-  boa('abc123xyz', '123');           // matrícula com menos de 4 caracteres só vale se for a senha inteira
-  ruim('12345678', '12345678', 'matrícula');
+  // tipo e formato: só texto de 6 dígitos ASCII (número, espaço, letra, largura total e outros alfabetos ficam de fora)
+  for (const v of [undefined, null, 480613, ['480613'], {}, '', '48061', '4806139', ' 480613', '480613 ', '48 613', '4806a3', '４８０６１３', '٤٨٠٦١٣', '480613\n'])
+    ruim(v, '', 'exatamente 6 dígitos');
+  for (const d of '0123456789') ruim(d.repeat(6), '', 'todos os dígitos iguais');
+  for (const q of ['012345', '123456', '234567', '345678', '456789', '987654', '876543', '765432', '654321', '543210']) ruim(q, '', 'sequência');
+  boa('890123'); boa('121212'); boa('480613'); boa('000001'); boa('135790');   // sequência que "dá a volta" ou alternada não é a regra
+  ruim('800001', '800001', 'matrícula'); ruim('234801', 'T1234801', 'matrícula'); ruim('000123', 'AB0001-23'.replace('-', ''), 'matrícula');
+  boa('800001', '10421');            // matrícula com menos de 6 dígitos: a regra não se aplica
+  boa('800002', '800001'); boa('480613', { toString: 1 });
 });
-
-test('senha: palavra de passe com acento decomposto conta pelo tamanho que será gravada (NFKC), não pelo que foi digitado', () => {
-    const decomposta = 'a\u0301e\u0301i\u0301o\u0301';   // visível: áéíó; gravada normalizada: 4 caracteres
-    assert.equal([...decomposta].length, 8);
-    assert.equal(decomposta.normalize('NFKC').length, 4);
-    const r = s.validarSenha(decomposta, '');
-    assert.match(String(r), /8 caracteres/, `a senha de 4 caracteres foi aceita (${r})`);
-    // 8 letras acentuadas decompostas (16 pontos de código) continuam valendo: 8 depois da normalização
-    assert.equal(s.validarSenha('a\u0301e\u0301i\u0301o\u0301u\u0301c\u0327a\u0303o\u0302', ''), null);
-  });
 
 /* ---------------------------------------------------------------- hash */
 test('hash: formatos estranhos ou parâmetros absurdos no banco nunca confirmam a senha, não derrubam e não pedem memória a mais', async () => {

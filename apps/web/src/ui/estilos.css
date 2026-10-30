@@ -2,6 +2,7 @@
    genéricos do tipo card); classes de módulo levam o prefixo do módulo. */
 @import 'tailwindcss';
 @import './tokens.css';
+@import './componentes.css';
 
 @theme inline {
   --color-bm-bg: var(--bm-bg);

@@ -14,7 +14,7 @@ let h, U;
 const API = '/api/emprestimo';
 const MIG = path.resolve(__dirname, '../../database/migrations');
 const F = {};
-const SENHA = 'Trena-Laranja-58', MAT = '710001';
+const SENHA = '739164', MAT = '710001';
 
 /** Bytes de mentira com a assinatura do formato (não precisam ser uma imagem desenhável). */
 const bytes = {

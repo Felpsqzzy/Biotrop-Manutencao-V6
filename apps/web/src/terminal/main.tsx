@@ -1,19 +1,24 @@
-// Terminal do almoxarifado (tablet, /terminal): página própria, sem o site. A tela de verdade entra na fase do empréstimo.
+// Terminal do almoxarifado (tablet, /terminal): página própria, sem o site. Motion com LazyMotion + domAnimation
+// (modo estrito: só `m`), MotionConfig reducedMotion="user" e os avisos (toast) do kit.
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
 import '../ui/estilos.css';
-import { Superficie } from '../ui';
+import './terminal.css';
+import { ToastProvider } from '../ui';
+import { Terminal } from './App';
 
 const raiz = document.getElementById('root');
 if (raiz) {
   createRoot(raiz).render(
     <StrictMode>
-      <main className="grid min-h-dvh place-items-center p-6">
-        <Superficie vidro className="w-full max-w-md rounded-[var(--bm-r-lg)] p-8 text-center">
-          <h1 className="text-xl font-semibold">Terminal do Almoxarifado</h1>
-          <p className="mt-2 text-bm-ink-2">Em construção na V6.</p>
-        </Superficie>
-      </main>
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig reducedMotion="user">
+          <ToastProvider>
+            <Terminal />
+          </ToastProvider>
+        </MotionConfig>
+      </LazyMotion>
     </StrictMode>,
   );
 }

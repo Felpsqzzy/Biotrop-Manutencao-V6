@@ -242,6 +242,7 @@ DECLARE
  col emprestimo.colaborador%ROWTYPE; e emprestimo.emprestimo%ROWTYPE; it emprestimo.emprestimo_item%ROWTYPE;
  m almox.material%ROWTYPE; cfg emprestimo.config%ROWTYPE; cu core.usuario%ROWTYPE;
  v jsonb; q numeric; n integer; colab uuid; novo_id uuid; chaves text[] := '{}'; k text; pend numeric; just text; res text; tot integer := 0; antes jsonb;
+ mo text; lin record; ign jsonb := '[]'; vistos text[] := '{}';   -- modalidade (EM/RM) e importação em lote (migration 44)
 BEGIN
  IF NOT app.usuario_ativo() THEN RAISE EXCEPTION 'Sessão inválida.' USING ERRCODE = '42501'; END IF;
  uid := app.usuario_atual(); g := emprestimo.gestao(); r := emprestimo.gerencia(); o := emprestimo.operador();
@@ -266,17 +267,21 @@ BEGIN
    IF NOT FOUND OR cu.bloqueado OR NOT cu.ativo OR col.usuario_id IS NULL OR NOT col.ativo THEN RAISE EXCEPTION 'Colaborador não cadastrado ou bloqueado no terminal.' USING ERRCODE = '42501'; END IF;
    IF jsonb_typeof(p->'itens') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'itens') NOT BETWEEN 1 AND 30 THEN RAISE EXCEPTION 'Informe de 1 a 30 itens.' USING ERRCODE = '22023'; END IF;
    IF coalesce(p->>'finalidade', 'manutencao') NOT IN ('capex','om','sm','tpm','manutencao','consumo','outro') THEN RAISE EXCEPTION 'Finalidade inválida.' USING ERRCODE = '22023'; END IF;
-   INSERT INTO emprestimo.emprestimo (colaborador_id, matricula, setor, centro_custo, atendente_id, origem, finalidade, finalidade_ref, prazo, observacao, chave)
+   -- EM (vai e volta, com prazo) ou RM (sai do estoque e não volta: sem prazo, aguardando a baixa do almoxarife; 44)
+   mo := coalesce(p->>'modalidade', 'emprestimo');
+   IF mo NOT IN ('emprestimo','retirada') THEN RAISE EXCEPTION 'Modalidade inválida.' USING ERRCODE = '22023'; END IF;
+   INSERT INTO emprestimo.emprestimo (colaborador_id, matricula, setor, centro_custo, atendente_id, origem, finalidade, finalidade_ref, prazo, observacao, chave, modalidade, status)
    VALUES (colab, col.matricula, col.setor, col.centro_custo, CASE WHEN emprestimo.no_terminal() THEN NULL ELSE uid END, CASE WHEN emprestimo.no_terminal() THEN 'terminal' ELSE 'painel' END,
            coalesce(p->>'finalidade', 'manutencao'), left(btrim(coalesce(p->>'finalidadeRef', '')), 60),
-           coalesce(nullif(p->>'prazo', '')::timestamptz, now() + make_interval(hours => cfg.prazo_padrao_horas)), left(btrim(coalesce(p->>'observacao', '')), 1000), p->>'chave')
+           CASE WHEN mo = 'emprestimo' THEN coalesce(nullif(p->>'prazo', '')::timestamptz, now() + make_interval(hours => cfg.prazo_padrao_horas)) END,
+           left(btrim(coalesce(p->>'observacao', '')), 1000), p->>'chave', mo, CASE WHEN mo = 'retirada' THEN 'aguardando_baixa' ELSE 'em_andamento' END)
    ON CONFLICT (colaborador_id, chave) DO NOTHING
    RETURNING * INTO e;
    IF NOT FOUND THEN   -- o mesmo pedido chegou duas vezes ao mesmo tempo: o segundo espera o primeiro e devolve o mesmo empréstimo
      SELECT * INTO e FROM emprestimo.emprestimo WHERE colaborador_id = colab AND chave = p->>'chave';
      RETURN jsonb_build_object('id', e.id, 'numero', e.numero, 'repetido', true);
    END IF;
-   IF e.prazo <= now() OR e.prazo > now() + interval '90 days' THEN RAISE EXCEPTION 'O prazo precisa estar entre agora e 90 dias.' USING ERRCODE = '22023'; END IF;
+   IF mo = 'emprestimo' AND (e.prazo <= now() OR e.prazo > now() + interval '90 days') THEN RAISE EXCEPTION 'O prazo precisa estar entre agora e 90 dias.' USING ERRCODE = '22023'; END IF;
    -- ordem fixa de travas: o saldo de cada ferramenta na ordem do id (uuid), a mesma da devolução, da conferência e do
    -- estorno; evita impasse com outra retirada, devolução ou conferência das mesmas ferramentas ao mesmo tempo
    FOR v IN SELECT value FROM jsonb_array_elements(p->'itens')
@@ -290,6 +295,7 @@ BEGIN
        n := (v->>'quantidade')::integer;
        SELECT * INTO f FROM emprestimo.ferramenta WHERE id = (v->>'ferramentaId')::uuid;
        IF NOT FOUND OR NOT f.ativo THEN RAISE EXCEPTION 'Ferramenta indisponível no cadastro.' USING ERRCODE = 'P0002'; END IF;
+       IF mo = 'retirada' AND NOT f.retiravel THEN RAISE EXCEPTION '% não pode ser retirada, só emprestada.', f.nome USING ERRCODE = '22023'; END IF;
        SELECT * INTO s FROM emprestimo.ferramenta_saldo WHERE ferramenta_id = f.id FOR UPDATE;
        IF f.controle = 'individual' THEN
          IF n <> 1 OR coalesce(v->>'unidadeId', '') !~* '^[0-9a-f-]{36}$' THEN RAISE EXCEPTION '% é controlada por unidade: escolha a unidade (quantidade 1).', f.nome USING ERRCODE = '22023'; END IF;
@@ -306,6 +312,7 @@ BEGIN
      ELSE
        -- o terminal só empresta ferramenta (material do REG.0306 é no balcão): a rota do terminal recusa antes; esta é a trava do banco
        IF emprestimo.no_terminal() THEN RAISE EXCEPTION 'O terminal empresta só ferramentas. Material é retirado no balcão do almoxarifado.' USING ERRCODE = '42501'; END IF;
+       IF mo = 'retirada' THEN RAISE EXCEPTION 'Retirada (RM) só de ferramenta marcada como retirável.' USING ERRCODE = '22023'; END IF;
        IF coalesce(v->>'quantidade', '') !~ '^[0-9]{1,10}(\.[0-9]{1,3})?$' OR (v->>'quantidade')::numeric <= 0 THEN RAISE EXCEPTION 'Quantidade inválida.' USING ERRCODE = '22023'; END IF;
        SELECT * INTO m FROM almox.material WHERE codigo = upper(btrim(v->>'materialCodigo'));
        IF NOT FOUND OR NOT m.ativo THEN RAISE EXCEPTION 'Material % não está no catálogo ativo.', v->>'materialCodigo' USING ERRCODE = 'P0002'; END IF;
@@ -334,6 +341,7 @@ BEGIN
      END IF;
    END IF;
    IF e.status IN ('devolvido','encerrado','estornado') THEN RAISE EXCEPTION 'Este empréstimo já está fechado.' USING ERRCODE = 'P0001'; END IF;
+   IF e.modalidade = 'retirada' THEN RAISE EXCEPTION 'Retirada não tem devolução: o almoxarifado confirma ou recusa a baixa.' USING ERRCODE = 'P0001'; END IF;
    IF jsonb_typeof(p->'itens') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'itens') NOT BETWEEN 1 AND 30 THEN RAISE EXCEPTION 'Informe os itens devolvidos.' USING ERRCODE = '22023'; END IF;
    IF (SELECT count(DISTINCT lower(value->>'itemId')) <> count(*) FROM jsonb_array_elements(p->'itens')) THEN RAISE EXCEPTION 'Item repetido na devolução.' USING ERRCODE = '22023'; END IF;
    -- itens na ordem do id da ferramenta (a mesma da retirada): o saldo de cada uma é travado nessa ordem, sem impasse
@@ -378,6 +386,7 @@ BEGIN
        RAISE EXCEPTION 'Chave de operação já usada em outra operação.' USING ERRCODE = '22023';
      END IF;
    END IF;
+   IF e.modalidade = 'retirada' THEN RAISE EXCEPTION 'Retirada não tem devolução: o almoxarifado confirma ou recusa a baixa.' USING ERRCODE = 'P0001'; END IF;
    IF jsonb_typeof(p->'itens') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'itens') NOT BETWEEN 1 AND 30 THEN RAISE EXCEPTION 'Informe os itens conferidos.' USING ERRCODE = '22023'; END IF;
    -- itens na ordem do id da ferramenta (a mesma da retirada): o saldo de cada uma é travado nessa ordem, sem impasse
    FOR v IN SELECT x.value FROM jsonb_array_elements(p->'itens') WITH ORDINALITY x(value, ordem)
@@ -425,6 +434,7 @@ BEGIN
      END IF;
    END IF;
    IF e.status = 'estornado' THEN RAISE EXCEPTION 'Empréstimo estornado.' USING ERRCODE = 'P0001'; END IF;
+   IF e.modalidade = 'retirada' THEN RAISE EXCEPTION 'Retirada se resolve por confirmar ou recusar a baixa.' USING ERRCODE = 'P0001'; END IF;
    res := coalesce(p->>'motivo', '');
    IF res NOT IN ('extravio','consumo') THEN RAISE EXCEPTION 'Motivo da baixa inválido.' USING ERRCODE = '22023'; END IF;
    IF length(just) < 5 THEN RAISE EXCEPTION 'Explique a baixa.' USING ERRCODE = '22023'; END IF;
@@ -451,6 +461,7 @@ BEGIN
    SELECT * INTO e FROM emprestimo.emprestimo WHERE id = (p->>'emprestimoId')::uuid FOR UPDATE;
    IF NOT FOUND THEN RAISE EXCEPTION 'Empréstimo inexistente.' USING ERRCODE = 'P0002'; END IF;
    IF e.status IN ('devolvido','encerrado','estornado') THEN RAISE EXCEPTION 'Este empréstimo já está fechado.' USING ERRCODE = 'P0001'; END IF;
+   IF e.modalidade = 'retirada' THEN RAISE EXCEPTION 'Retirada não tem prazo de devolução.' USING ERRCODE = 'P0001'; END IF;
    IF length(just) < 5 THEN RAISE EXCEPTION 'Explique a mudança de prazo.' USING ERRCODE = '22023'; END IF;
    IF coalesce(p->>'prazo', '') = '' OR (p->>'prazo')::timestamptz <= now() OR (p->>'prazo')::timestamptz > now() + interval '90 days' THEN RAISE EXCEPTION 'O prazo precisa estar entre agora e 90 dias.' USING ERRCODE = '22023'; END IF;
    UPDATE emprestimo.emprestimo SET prazo = (p->>'prazo')::timestamptz, atualizado_em = now() WHERE id = e.id;
@@ -462,9 +473,11 @@ BEGIN
  IF acao = 'ferramenta_salvar' THEN
    IF coalesce(p->>'controle', '') NOT IN ('individual','quantidade') AND p->>'id' IS NULL THEN RAISE EXCEPTION 'Informe o tipo de controle.' USING ERRCODE = '22023'; END IF;
    IF p->>'id' IS NULL THEN
-     INSERT INTO emprestimo.ferramenta (codigo, nome, descricao, categoria, marca, modelo, controle, localizacao, conservacao, criado_por)
+     -- retiravel, codigo_compra e patrimonio: colunas da 44 (o tamanho é conferido na rota e na CHECK, sem cortar)
+     INSERT INTO emprestimo.ferramenta (codigo, nome, descricao, categoria, marca, modelo, controle, localizacao, conservacao, retiravel, codigo_compra, patrimonio, criado_por)
      VALUES (upper(btrim(p->>'codigo')), btrim(p->>'nome'), left(coalesce(p->>'descricao', ''), 1000), left(btrim(coalesce(p->>'categoria', '')), 80), left(btrim(coalesce(p->>'marca', '')), 80),
-             left(btrim(coalesce(p->>'modelo', '')), 80), p->>'controle', left(btrim(coalesce(p->>'localizacao', '')), 120), coalesce(p->>'conservacao', 'boa'), uid) RETURNING * INTO f;
+             left(btrim(coalesce(p->>'modelo', '')), 80), p->>'controle', left(btrim(coalesce(p->>'localizacao', '')), 120), coalesce(p->>'conservacao', 'boa'),
+             coalesce((p->>'retiravel')::boolean, false), btrim(coalesce(p->>'codigoCompra', '')), btrim(coalesce(p->>'patrimonio', '')), uid) RETURNING * INTO f;
      IF f.controle = 'individual' THEN
        IF jsonb_typeof(p->'unidades') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'unidades') NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Informe de 1 a 200 patrimônios ou séries.' USING ERRCODE = '22023'; END IF;
        -- cada patrimônio é um texto: objeto, lista, número ou sim/não não viram identificador por conversão
@@ -476,17 +489,18 @@ BEGIN
        n := (p->>'total')::integer;
      END IF;
      INSERT INTO emprestimo.ferramenta_saldo (ferramenta_id, total, disponivel) VALUES (f.id, n, n);
-     INSERT INTO emprestimo.auditoria (tipo, ferramenta_id, detalhe, por) VALUES ('ferramenta_criada', f.id, jsonb_build_object('codigo', f.codigo, 'controle', f.controle, 'total', n), uid);
+     INSERT INTO emprestimo.auditoria (tipo, ferramenta_id, detalhe, por) VALUES ('ferramenta_criada', f.id, jsonb_build_object('codigo', f.codigo, 'controle', f.controle, 'total', n, 'retiravel', f.retiravel), uid);
    ELSE
      SELECT * INTO fa FROM emprestimo.ferramenta WHERE id = (p->>'id')::uuid FOR UPDATE;
      IF NOT FOUND THEN RAISE EXCEPTION 'Ferramenta inexistente.' USING ERRCODE = 'P0002'; END IF;
      UPDATE emprestimo.ferramenta SET nome = btrim(coalesce(p->>'nome', nome)), descricao = left(coalesce(p->>'descricao', descricao), 1000), categoria = left(btrim(coalesce(p->>'categoria', categoria)), 80),
        marca = left(btrim(coalesce(p->>'marca', marca)), 80), modelo = left(btrim(coalesce(p->>'modelo', modelo)), 80), localizacao = left(btrim(coalesce(p->>'localizacao', localizacao)), 120),
-       conservacao = coalesce(p->>'conservacao', conservacao), ativo = coalesce((p->>'ativo')::boolean, ativo), atualizado_em = now()
+       conservacao = coalesce(p->>'conservacao', conservacao), ativo = coalesce((p->>'ativo')::boolean, ativo), retiravel = coalesce((p->>'retiravel')::boolean, retiravel),
+       codigo_compra = btrim(coalesce(p->>'codigoCompra', codigo_compra)), patrimonio = btrim(coalesce(p->>'patrimonio', patrimonio)), atualizado_em = now()
       WHERE id = fa.id RETURNING * INTO f;
      -- alteração cadastral auditada com o antes e o depois de cada campo que mudou (nada de alteração silenciosa)
      INSERT INTO emprestimo.auditoria (tipo, ferramenta_id, detalhe, por) VALUES ('ferramenta_editada', f.id, jsonb_build_object('ativo', f.ativo,
-       'alteracoes', emprestimo.alteracoes(to_jsonb(fa), to_jsonb(f), ARRAY['nome','descricao','categoria','marca','modelo','localizacao','conservacao','ativo'])), uid);
+       'alteracoes', emprestimo.alteracoes(to_jsonb(fa), to_jsonb(f), ARRAY['nome','descricao','categoria','marca','modelo','localizacao','conservacao','ativo','retiravel','codigo_compra','patrimonio'])), uid);
    END IF;
    RETURN jsonb_build_object('id', f.id, 'codigo', f.codigo);
  END IF;
@@ -499,6 +513,73 @@ BEGIN
    UPDATE emprestimo.ferramenta_saldo SET total = total + 1, disponivel = disponivel + 1 WHERE ferramenta_id = f.id;
    INSERT INTO emprestimo.auditoria (tipo, ferramenta_id, detalhe, por) VALUES ('unidade_adicionada', f.id, jsonb_build_object('identificador', btrim(p->>'identificador')), uid);
    RETURN jsonb_build_object('id', f.id);
+ END IF;
+ /* ---- retirada (RM, 44): o almoxarife confirma a baixa (nº do Dynamics opcional) ou recusa (volta ao disponível) ---- */
+ IF acao IN ('retirada_confirmar','retirada_recusar') THEN
+   SELECT * INTO e FROM emprestimo.emprestimo WHERE id = (p->>'emprestimoId')::uuid FOR UPDATE;
+   IF NOT FOUND THEN RAISE EXCEPTION 'Empréstimo inexistente.' USING ERRCODE = 'P0002'; END IF;
+   IF e.modalidade <> 'retirada' THEN RAISE EXCEPTION 'Este registro é um empréstimo, não uma retirada.' USING ERRCODE = 'P0001'; END IF;
+   -- chave de operação (opcional; o painel gera ao abrir a confirmação): o reenvio devolve o resultado do primeiro
+   IF p->>'chave' IS NOT NULL THEN
+     IF coalesce(p->>'chave', '') !~ '^[A-Za-z0-9_-]{8,80}$' THEN RAISE EXCEPTION 'Chave de operação inválida.' USING ERRCODE = '22023'; END IF;
+     SELECT tipo INTO k FROM emprestimo.emprestimo_evento WHERE emprestimo_id = e.id AND chave = p->>'chave' LIMIT 1;
+     IF FOUND THEN
+       -- (o IF do plpgsql lê a condição até o primeiro THEN: nada de CASE aqui)
+       IF (acao = 'retirada_confirmar' AND k = 'baixa') OR (acao = 'retirada_recusar' AND k = 'estorno') THEN RETURN jsonb_build_object('id', e.id, 'status', e.status, 'repetido', true); END IF;
+       RAISE EXCEPTION 'Chave de operação já usada em outra operação.' USING ERRCODE = '22023';
+     END IF;
+   END IF;
+   IF e.status <> 'aguardando_baixa' THEN RAISE EXCEPTION 'Esta retirada já foi resolvida.' USING ERRCODE = 'P0001'; END IF;
+   IF acao = 'retirada_recusar' AND length(just) < 5 THEN RAISE EXCEPTION 'Explique a recusa (pelo menos 5 caracteres).' USING ERRCODE = '22023'; END IF;
+   -- saldo de cada ferramenta travado na ordem do id (a mesma da retirada, da devolução e do estorno)
+   FOR it IN SELECT * FROM emprestimo.emprestimo_item WHERE emprestimo_id = e.id ORDER BY ferramenta_id, id FOR UPDATE LOOP
+     SELECT * INTO s FROM emprestimo.ferramenta_saldo WHERE ferramenta_id = it.ferramenta_id FOR UPDATE;
+     IF acao = 'retirada_confirmar' THEN
+       UPDATE emprestimo.emprestimo_item SET qtd_baixa = quantidade,
+         numero_baixa = CASE WHEN btrim(coalesce(p->>'numeroBaixa', '')) <> '' THEN left(btrim(p->>'numeroBaixa'), 60) ELSE numero_baixa END WHERE id = it.id;
+       UPDATE emprestimo.ferramenta_saldo SET emprestada = emprestada - it.quantidade::integer, baixada = baixada + it.quantidade::integer WHERE ferramenta_id = it.ferramenta_id;
+       IF it.unidade_id IS NOT NULL THEN UPDATE emprestimo.ferramenta_unidade SET estado = 'baixada' WHERE id = it.unidade_id; END IF;
+     ELSE
+       UPDATE emprestimo.ferramenta_saldo SET emprestada = emprestada - it.quantidade::integer, disponivel = disponivel + it.quantidade::integer WHERE ferramenta_id = it.ferramenta_id;
+       IF it.unidade_id IS NOT NULL THEN UPDATE emprestimo.ferramenta_unidade SET estado = 'disponivel' WHERE id = it.unidade_id; END IF;
+     END IF;
+     -- a chave vai só no primeiro evento (índice único por item)
+     INSERT INTO emprestimo.emprestimo_evento (emprestimo_id, item_id, tipo, quantidade, condicao, justificativa, chave, por)
+     VALUES (e.id, it.id, CASE acao WHEN 'retirada_confirmar' THEN 'baixa' ELSE 'estorno' END, it.quantidade,
+             CASE acao WHEN 'retirada_confirmar' THEN '' ELSE 'retirada_recusada' END, left(just, 1000), CASE WHEN tot = 0 THEN p->>'chave' END, uid);
+     tot := tot + 1;
+   END LOOP;
+   IF acao = 'retirada_confirmar' THEN res := emprestimo.recalcular(e.id);   -- tudo baixado: 'encerrado'
+   ELSE
+     UPDATE emprestimo.emprestimo SET status = 'estornado', atualizado_em = now(), encerrado_em = now() WHERE id = e.id;
+     res := 'estornado';
+   END IF;
+   RETURN jsonb_build_object('id', e.id, 'status', res, 'repetido', false);
+ END IF;
+
+ /* ---- importação da planilha de ferramentas (44): cada linha é uma peça física (código FMNT), controle por quantidade,
+    total 1. Código já cadastrado (ou repetido na planilha) é ignorado, nunca sobrescrito. Uma transação só, auditada. ---- */
+ IF acao = 'ferramentas_importar' THEN
+   IF jsonb_typeof(p->'linhas') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'linhas') NOT BETWEEN 1 AND 1000 THEN RAISE EXCEPTION 'Informe de 1 a 1000 linhas.' USING ERRCODE = '22023'; END IF;
+   FOR lin IN SELECT x.value AS v, x.ordem FROM jsonb_array_elements(p->'linhas') WITH ORDINALITY x(value, ordem) LOOP
+     k := upper(btrim(coalesce(lin.v->>'codigo', '')));
+     IF k !~ '^[A-Z0-9][A-Z0-9._/-]{1,39}$' OR length(btrim(coalesce(lin.v->>'nome', ''))) NOT BETWEEN 1 AND 160 THEN
+       RAISE EXCEPTION 'Linha %: código ou descrição inválidos.', lin.ordem USING ERRCODE = '22023'; END IF;
+     IF k = ANY (vistos) THEN ign := ign || jsonb_build_object('codigo', k, 'motivo', 'Código repetido na planilha'); CONTINUE; END IF;
+     vistos := vistos || k;
+     INSERT INTO emprestimo.ferramenta (codigo, nome, categoria, controle, localizacao, retiravel, codigo_compra, patrimonio, criado_por)
+     VALUES (k, btrim(lin.v->>'nome'), left(btrim(coalesce(lin.v->>'categoria', '')), 80), 'quantidade', left(btrim(coalesce(lin.v->>'localizacao', '')), 120),
+             coalesce((lin.v->>'retiravel')::boolean, false), btrim(coalesce(lin.v->>'codigoCompra', '')), btrim(coalesce(lin.v->>'patrimonio', '')), uid)
+     ON CONFLICT (codigo) DO NOTHING RETURNING * INTO f;
+     IF NOT FOUND THEN ign := ign || jsonb_build_object('codigo', k, 'motivo', 'Código já cadastrado'); CONTINUE; END IF;
+     INSERT INTO emprestimo.ferramenta_saldo (ferramenta_id, total, disponivel) VALUES (f.id, 1, 1);
+     INSERT INTO emprestimo.auditoria (tipo, ferramenta_id, detalhe, por) VALUES ('ferramenta_importada', f.id,
+       jsonb_build_object('codigo', f.codigo, 'controle', f.controle, 'total', 1, 'retiravel', f.retiravel, 'linha', lin.ordem), uid);
+     tot := tot + 1;
+   END LOOP;
+   INSERT INTO emprestimo.auditoria (tipo, detalhe, por) VALUES ('ferramentas_importadas',
+     jsonb_build_object('linhas', jsonb_array_length(p->'linhas'), 'criadas', tot, 'ignoradas', jsonb_array_length(ign)), uid);
+   RETURN jsonb_build_object('criadas', tot, 'ignoradas', ign);
  END IF;
  IF acao = 'colaborador_salvar' THEN
    IF coalesce(p->>'email', '') !~* '^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$' OR length(p->>'email') > 254 OR length(btrim(coalesce(p->>'nome', ''))) < 3 THEN RAISE EXCEPTION 'Informe nome completo e e-mail válidos.' USING ERRCODE = '22023'; END IF;
@@ -569,6 +650,7 @@ BEGIN
    SELECT * INTO e FROM emprestimo.emprestimo WHERE id = (p->>'emprestimoId')::uuid FOR UPDATE;
    IF NOT FOUND THEN RAISE EXCEPTION 'Empréstimo inexistente.' USING ERRCODE = 'P0002'; END IF;
    IF e.status = 'estornado' THEN RAISE EXCEPTION 'Empréstimo já estornado.' USING ERRCODE = 'P0001'; END IF;
+   IF e.modalidade = 'retirada' THEN RAISE EXCEPTION 'Retirada se resolve por confirmar ou recusar a baixa.' USING ERRCODE = 'P0001'; END IF;
    IF length(just) < 5 THEN RAISE EXCEPTION 'Explique o estorno.' USING ERRCODE = '22023'; END IF;
    IF EXISTS (SELECT 1 FROM emprestimo.emprestimo_item WHERE emprestimo_id = e.id AND (qtd_conferencia > 0 OR qtd_devolvida > 0 OR qtd_baixa > 0)) THEN
      RAISE EXCEPTION 'Já há devolução ou baixa neste empréstimo: conclua por conferência e baixa, não por estorno.' USING ERRCODE = 'P0001'; END IF;

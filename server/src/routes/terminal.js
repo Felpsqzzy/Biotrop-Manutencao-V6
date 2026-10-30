@@ -3,6 +3,8 @@
 //  • O colaborador é sempre o da sessão: o corpo nunca escolhe a pessoa. Tudo roda no canal 'terminal', em que o banco
 //    trata qualquer perfil (até admin) como colaborador: retira e devolve só para si e só vê o que é seu.
 //  • Só ferramenta: material do catálogo MAN (REG.0306) é retirado e devolvido no balcão, pelo painel.
+//  • Empréstimo (EM, vai e volta) ou retirada (RM, só ferramenta retirável; fica aguardando a baixa do almoxarife).
+//  • Senha = PIN de 6 dígitos (regras em lib/senha-terminal.js), digitado no teclado numérico da tela.
 //  • Login: mesma resposta para matrícula inexistente, senha errada, bloqueado, inativo, sem senha e bloqueio temporário;
 //    sempre o mesmo trabalho de scrypt (tempo igual, também com hash de custo antigo). Limites: por matrícula e por
 //    aparelho no banco (migration 41; a tentativa é reservada ANTES do scrypt, então pedidos simultâneos não passam do
@@ -92,7 +94,7 @@ router.post('/entrar', E.handle(async (req, res) => {
   res.json({ ok: true, colaborador: colaborador(r), inatividadeSegundos: r.inatividade, expiraEm: r.expira_em, prazoPadraoHoras: r.prazo });
 }));
 
-/** Primeiro acesso e redefinição: código do convite + senha nova; a senha fraca é recusada antes de olhar o convite. */
+/** Primeiro acesso e redefinição: código do convite + PIN novo; o PIN fora da regra é recusado antes de olhar o convite. */
 router.post('/primeiro-acesso', E.handle(async (req, res) => {
   const b = req.body || {};
   const fraca = senhas.validarSenha(b.senha, senhas.textoDe(b.matricula));
@@ -166,17 +168,24 @@ router.get('/eu', E.handle(async (req, res) => {
   res.json({ ok: true, colaborador: req.terminal.colaborador, inatividadeSegundos: req.terminal.inatividadeSegundos, expiraEm: req.terminal.expiraEm, prazoPadraoHoras: prazo });
 }));
 
+// Catálogo do tablet: até 1000 (o tamanho de uma importação); passou disso, "cortado: true" e a tela pede para refinar a
+// busca. ?modalidade=retirada traz só as retiráveis (filtro no banco, antes do limite).
+const MAX_CATALOGO = 1000;
 router.get('/ferramentas', E.handle(async (req, res) => {
+  let cortado = false;
   const rows = await E.emTransacao(req.terminalUser, 'terminal', async db => {
-    const lista = await E.buscarFerramentas(db, { q: req.query.q, situacao: 'ativas', categoria: req.query.categoria });
+    const lista = await E.buscarFerramentas(db, { q: req.query.q, situacao: 'ativas', categoria: req.query.categoria,
+      retiravel: req.query.modalidade === 'retirada', limite: MAX_CATALOGO + 1, teto: MAX_CATALOGO + 1 });
+    if (lista.length > MAX_CATALOGO) { cortado = true; lista.length = MAX_CATALOGO; }
     const ids = lista.filter(f => f.controle === 'individual').map(f => f.id);
     const unidades = ids.length ? (await db.query(`SELECT id, ferramenta_id, identificador FROM emprestimo.ferramenta_unidade
       WHERE ferramenta_id = ANY($1::uuid[]) AND estado = 'disponivel' ORDER BY identificador`, [ids])).rows : [];
     return lista.map(f => ({ id: f.id, codigo: f.codigo, nome: f.nome, descricao: f.descricao, categoria: f.categoria, marca: f.marca, modelo: f.modelo,
       controle: f.controle, localizacao: f.localizacao, conservacao: f.conservacao, saldo: f.saldo, foto: f.foto,
+      retiravel: f.retiravel,
       ...(f.controle === 'individual' ? { unidadesDisponiveis: unidades.filter(u => u.ferramenta_id === f.id).map(u => ({ id: u.id, identificador: u.identificador })) } : {}) }));
   });
-  res.json({ ok: true, rows });
+  res.json({ ok: true, rows, cortado });
 }));
 // Miniatura (?mini=1) e foto da ferramenta nos cartões do tablet: só leitura, e só de ferramenta ativa (o RLS do canal
 // terminal esconde a de inativa: 404). Enviar, trocar e remover a foto é só no painel.
@@ -196,7 +205,7 @@ router.get('/emprestimos', E.handle(async (req, res) => {
     const ids = lista.map(e => e.id);
     const itens = ids.length ? (await db.query(`SELECT i.*, (i.quantidade - i.qtd_conferencia - i.qtd_devolvida - i.qtd_baixa) AS pendente
       FROM emprestimo.emprestimo_item i WHERE i.emprestimo_id = ANY($1::uuid[]) ORDER BY i.codigo`, [ids])).rows : [];
-    return lista.map(e => ({ id: e.id, numero: e.numero, status: e.status, criadoEm: e.criadoEm, prazo: e.prazo, encerradoEm: e.encerradoEm,
+    return lista.map(e => ({ id: e.id, numero: e.numero, modalidade: e.modalidade, status: e.status, criadoEm: e.criadoEm, prazo: e.prazo, encerradoEm: e.encerradoEm,
       atrasado: e.atrasado, pendente: e.pendente, emConferencia: e.emConferencia, itens: e.itens,
       itensLista: itens.filter(i => i.emprestimo_id === e.id).map(i => ({ id: i.id, tipo: i.tipo, codigo: i.codigo, descricao: i.descricao,
         quantidade: Number(i.quantidade), devolvida: Number(i.qtd_devolvida), emConferencia: Number(i.qtd_conferencia), baixa: Number(i.qtd_baixa),
@@ -222,8 +231,10 @@ router.post('/emprestimos', E.handle(async (req, res) => {
   }
   const chave = E.texto(b.chave, 80);
   if (!CHAVE.test(chave)) throw E.fail(400, 'Chave de operação inválida.');
-  // colaboradorId do corpo é ignorado: no canal terminal o banco registra para quem está logado
-  const r = await E.executar(req.terminalUser, 'terminal', 'emprestar', { itens: E.itensEmprestimo(b.itens), chave, observacao: E.texto(b.observacao, 1000) });
+  // colaboradorId do corpo é ignorado: no canal terminal o banco registra para quem está logado. Retirada (RM): o banco
+  // recusa ferramenta não retirável (400) e a deixa aguardando a baixa do almoxarifado.
+  const r = await E.executar(req.terminalUser, 'terminal', 'emprestar', { itens: E.itensEmprestimo(b.itens), chave, observacao: E.texto(b.observacao, 1000),
+    modalidade: E.modalidadeDe(b.modalidade) });
   res.status(r.repetido ? 200 : 201).json({ ok: true, ...r });
 }));
 

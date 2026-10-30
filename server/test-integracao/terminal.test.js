@@ -11,7 +11,7 @@ const { subirApp } = require('./_harness');
 
 let h, U;
 const MIG = path.resolve(__dirname, '../../database/migrations');
-const SENHA = { t1: 'Furadeira#Azul7', t1b: 'Martelo-Verde-42', t2: 'Chave.Inglesa9', adm: 'Painel-Seguro-55', alm: 'Balcao!Almox31' };
+const SENHA = { t1: '480613', t1b: '592816', t2: '371940', adm: '846205', alm: '730518' };   // PINs fictícios (6 dígitos)
 const MAT = { t1: '700001', t2: '700002', t3: '700003', inat: '700009', adm: 'A70001', ges: 'G70001', alm: 'L70001' };
 const F = {};
 const segredos = [];   // tudo o que não pode aparecer em auditoria/resposta
@@ -108,7 +108,7 @@ test('primeiro acesso: senha fraca antes do convite, código errado, válido ent
   const c = await convite(U.alm, U.t1);   // novo convite invalida o anterior
   assert.equal((await h.q('SELECT count(*)::int n FROM emprestimo.terminal_convite WHERE usuario_id=$1 AND usado_em IS NULL AND invalidado_em IS NULL', [U.t1.id])).rows[0].n, 1);
   const t = tablet();
-  for (const [senha, motivo] of [['curta1', /8 caracteres/], ['12345678', /sequência/], ['aaaaaaaa', /repetido/], [`${MAT.t1}ab`, /matrícula/], ['senha123', /comum/]]) {
+  for (const [senha, motivo] of [['48061', /6 dígitos/], ['Furadeira#Azul7', /6 dígitos/], ['123456', /sequência/], ['555555', /iguais/], [MAT.t1, /matrícula/]]) {
     const r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: 'ERRA-DO22', senha });
     assert.equal(r.s, 400, senha); assert.match(r.j.erro, motivo);
   }
@@ -120,7 +120,7 @@ test('primeiro acesso: senha fraca antes do convite, código errado, válido ent
   assert.ok(Number.isInteger(r.j.inatividadeSegundos) && r.j.inatividadeSegundos >= 30);
   assert.ok(t.cookie, 'já entrou');
   assert.equal((await t.req('GET', '/api/terminal/eu')).s, 200);
-  assert.equal((await tablet().req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: c.j.codigo, senha: 'Outra-Senha-77' })).s, 400, 'código reusado');
+  assert.equal((await tablet().req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: c.j.codigo, senha: '927364' })).s, 400, 'código reusado');
   const hash = (await cred(U.t1)).senha_hash;
   assert.match(hash, /^scrypt\$1\$16384\$8\$1\$/); assert.ok(!hash.includes(SENHA.t1));
   assert.equal((await acesso(U.t1)).situacao, 'ativo');
@@ -198,7 +198,7 @@ test('limite por aparelho: muitos erros do mesmo IP → 429; outro IP segue norm
   for (let i = 0; i < 30; i += 1) assert.equal((await t.entrar(`79${String(i).padStart(4, '0')}`, 'Qualquer-1x')).s, 401);
   let r = await t.entrar(MAT.t1, SENHA.t1);
   assert.deepEqual([r.s, r.j.erro], [429, 'Muitas tentativas. Aguarde alguns minutos.']);
-  r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: 'ABCD-EFGH', senha: 'Senha-Boa-Nova1' });
+  r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: 'ABCD-EFGH', senha: '615283' });
   assert.equal(r.s, 429);
   assert.equal((await tablet().entrar(MAT.t1, SENHA.t1)).s, 200);
   const guardados = (await h.q('SELECT DISTINCT ip_hash FROM emprestimo.terminal_tentativa')).rows.map(x => x.ip_hash);
@@ -231,7 +231,7 @@ test('limite por aparelho com pedidos simultâneos: a tentativa é reservada ant
   // primeiro acesso do mesmo jeito (matrículas inexistentes: nenhuma credencial é tocada)
   const t2 = tablet();
   const hashes = await contando('gerarHash', async () => {
-    rs = await Promise.all(Array.from({ length: 35 }, (_, i) => t2.req('POST', '/api/terminal/primeiro-acesso', { matricula: `77${String(i).padStart(4, '0')}`, codigo: 'ABCD-EFGH', senha: 'Senha-Boa-Nova1' })));
+    rs = await Promise.all(Array.from({ length: 35 }, (_, i) => t2.req('POST', '/api/terminal/primeiro-acesso', { matricula: `77${String(i).padStart(4, '0')}`, codigo: 'ABCD-EFGH', senha: '615283' })));
   });
   st = porStatus(rs);
   assert.equal(st[400], 30); assert.equal((st[429] || 0) + (st[503] || 0), 5, JSON.stringify(st));
@@ -243,7 +243,7 @@ test('primeiro acesso com o aparelho acima do limite: 429 sem calcular o scrypt 
   for (let i = 0; i < 30; i += 1) assert.equal((await t.entrar(`76${String(i).padStart(4, '0')}`, 'Qualquer-1x')).s, 401);
   let r;
   const hashes = await contando('gerarHash', async () => {
-    r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: 'ABCD-EFGH', senha: 'Senha-Boa-Nova1' });
+    r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t1, codigo: 'ABCD-EFGH', senha: '615283' });
   });
   assert.deepEqual([r.s, r.j.erro], [429, 'Muitas tentativas. Aguarde alguns minutos.']);
   assert.equal(hashes, 0, 'nenhum scrypt (128 MiB) para quem já passou do limite');
@@ -493,7 +493,7 @@ test('saída administrativa: senha do terminal + 2FA do site; perfil, sem 2FA, c
 test('matrícula com letra não diferencia maiúsculas no tablet: entrar e primeiro acesso acham a pessoa com "a70001" ou "A70001"', async () => {
   let r = await tablet().entrar(MAT.adm.toLowerCase(), SENHA.adm);
   assert.equal(r.s, 200, JSON.stringify(r.j)); assert.equal(r.j.colaborador.matricula, MAT.adm, 'a matrícula volta como foi cadastrada');
-  const nova = 'Balcao-Novo-Almox77'; segredos.push(nova);
+  const nova = '283946'; segredos.push(nova);
   const c = await convite(U.alm, U.alm);
   r = await tablet().req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.alm.toLowerCase(), codigo: c.j.codigo, senha: nova });
   assert.equal(r.s, 200, JSON.stringify(r.j));
@@ -510,7 +510,7 @@ test('entrar, primeiro acesso e /eu informam o prazo padrão da retirada (o resu
   try {
     r = await t.req('GET', '/api/terminal/eu');
     assert.deepEqual([r.s, r.j.prazoPadraoHoras], [200, 72], 'a configuração vale na hora');
-    const senha = 'Chave-Prazo-Teste31'; segredos.push(senha);
+    const senha = '502719'; segredos.push(senha);
     const c = await convite(U.alm, U.t3);
     r = await tablet().req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.t3, codigo: c.j.codigo, senha });
     assert.deepEqual([r.s, r.j.prazoPadraoHoras], [200, 72]);
@@ -555,4 +555,27 @@ test('reaplicar as migrations 40 e 41 duas vezes (como o deploy) não perde nada
   }
   assert.deepEqual(await conta(), antes);
   assert.equal((await tablet().entrar(MAT.t1, SENHA.t1b)).s, 200, 'login continua funcionando');
+});
+
+test('catálogo do tablet: ?modalidade=retirada filtra as retiráveis no banco, até 1000 com "cortado", sem campos da planilha', async () => {
+  const t = tablet();
+  assert.equal((await t.entrar(MAT.t1, SENHA.t1b)).s, 200);
+  let r = await painel(U.alm, 'POST', '/api/emprestimo/ferramentas', { codigo: 'FER-T090', nome: 'Disco retirável (teste)', controle: 'quantidade', total: 3, retiravel: true, codigoCompra: 'CC-T90', patrimonio: 'PAT-T90' });
+  assert.equal(r.s, 201, JSON.stringify(r.j));
+  r = await t.req('GET', '/api/terminal/ferramentas?modalidade=retirada');
+  assert.equal(r.s, 200);
+  assert.deepEqual([r.j.rows.map(x => x.codigo), r.j.cortado], [['FER-T090'], false]);
+  assert.ok(!('codigoCompra' in r.j.rows[0]) && !('patrimonio' in r.j.rows[0]), 'o tablet não recebe código de compra nem patrimônio');
+  r = await t.req('GET', '/api/terminal/ferramentas');
+  assert.ok(r.j.rows.some(x => x.codigo === 'FER-T001') && r.j.rows.some(x => x.codigo === 'FER-T090'), 'Empréstimo traz todas');
+  // 1000 retiráveis importadas (no fim da ordem por nome) + FER-T090 = 1001: vem cheio e cortado
+  const linhas = Array.from({ length: 1000 }, (_, i) => ({ codigo: `FMNT-T${String(i).padStart(4, '0')}`, nome: `Zz peça de lote (teste) ${i}`, retiravel: true }));
+  r = await painel(U.alm, 'POST', '/api/emprestimo/ferramentas/importar', { linhas });
+  assert.equal(r.s, 200, JSON.stringify(r.j));
+  r = await t.req('GET', '/api/terminal/ferramentas?modalidade=retirada');
+  assert.deepEqual([r.s, r.j.rows.length, r.j.cortado], [200, 1000, true]);
+  assert.ok(r.j.rows.every(x => x.retiravel === true));
+  assert.equal(r.j.rows[0].codigo, 'FER-T090', 'ordem por nome: a busca no banco vem antes do limite');
+  r = await t.req('GET', '/api/terminal/ferramentas?modalidade=retirada&q=disco');
+  assert.deepEqual([r.j.rows.map(x => x.codigo), r.j.cortado], [['FER-T090'], false]);
 });

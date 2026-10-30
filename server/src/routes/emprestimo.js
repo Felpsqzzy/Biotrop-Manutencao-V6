@@ -4,6 +4,8 @@
 // O terminal do tablet (fase 4, routes/terminal.js) usa as mesmas funções com o canal 'terminal': lá todo mundo é só
 // colaborador. O acesso ao terminal (convite, bloqueio) é administrado aqui, pela gestão (migration 41). Foto opcional
 // da ferramenta (migration 43): a gestão envia, troca e remove aqui; o painel e o terminal leem pela rota da imagem.
+// Empréstimo (EM) × retirada (RM) e importação da planilha de ferramentas (migration 44): a retirada nasce aguardando a
+// baixa, sem prazo, e a gestão confirma ou recusa em /emprestimos/:id/retirada.
 const express = require('express');
 const { transaction } = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
@@ -14,8 +16,13 @@ const { fotoDoCorpo } = require('../lib/imagem');
 const router = express.Router();
 const GESTAO = new Set(['admin', 'gestor', 'almoxarife']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// ABERTOS: empréstimo com algo a devolver (o que pode atrasar e gera aviso). A retirada aguardando baixa também está
+// "aberta" nas listas (status=abertos, abertos primeiro), mas não tem prazo nem atraso.
 const ABERTOS = ['em_andamento', 'parcialmente_devolvido', 'aguardando_conferencia'];
-const STATUS = new Set([...ABERTOS, 'devolvido', 'encerrado', 'estornado']);
+const ABERTOS_LISTA = [...ABERTOS, 'aguardando_baixa'];
+const STATUS = new Set([...ABERTOS_LISTA, 'devolvido', 'encerrado', 'estornado']);
+const MODALIDADES = new Set(['emprestimo', 'retirada']);
+const CODIGO = /^[A-Z0-9][A-Z0-9._/-]{1,39}$/;   // o mesmo CHECK de emprestimo.ferramenta.codigo
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 function id(v) { if (typeof v !== 'string' || !UUID.test(v)) throw fail(400, 'Identificador inválido.'); return v; }
@@ -48,6 +55,33 @@ function so(body, chaves) {
   return out;
 }
 function lista(v, max) { if (!Array.isArray(v) || !v.length || v.length > max) throw fail(400, `Informe de 1 a ${max} itens.`); return v; }
+/** EM ou RM do corpo: ausente (ou vazio) é empréstimo; outro valor é 400, nunca vira empréstimo calado. */
+function modalidadeDe(v) {
+  if (v == null || v === '') return 'emprestimo';
+  if (typeof v !== 'string' || !MODALIDADES.has(v)) throw fail(400, 'Modalidade inválida.');
+  return v;
+}
+/** sim/não estrito (true/false ou "true"/"false"); ausente ou nulo: undefined (não mexe). */
+function simNao(v, msg) {
+  if (v == null) return undefined;
+  if (v !== true && v !== false && v !== 'true' && v !== 'false') throw fail(400, msg);
+  return v === true || v === 'true';
+}
+/**
+ * Campos da planilha no cadastro (migration 44): retirável (sim/não), código de compra (até 60) e patrimônio (até 80).
+ * Texto acima do limite é recusado, não cortado. pre: prefixo da mensagem (a linha da importação).
+ */
+function camposPlanilha(p, pre = '') {
+  const r = simNao(p.retiravel, `${pre}Informe se a ferramenta é retirável (true) ou só emprestada (false).`);
+  if (r === undefined) delete p.retiravel; else p.retiravel = r;
+  for (const [k, max, rot] of [['codigoCompra', 60, 'Código de compra'], ['patrimonio', 80, 'Patrimônio']]) {
+    if (p[k] == null) { delete p[k]; continue; }
+    if (typeof p[k] !== 'string' && typeof p[k] !== 'number') throw fail(400, `${pre}Dados inválidos: confira os campos de texto.`);
+    p[k] = texto(p[k], max + 1);
+    if (p[k].length > max) throw fail(400, `${pre}${rot} com mais de ${max} caracteres.`);
+  }
+  return p;
+}
 
 function handle(fn) {
   return async (req, res, next) => {
@@ -90,12 +124,15 @@ const COM_FOTO = 'LEFT JOIN emprestimo.ferramenta_foto ff ON ff.ferramenta_id = 
 function ferramentaRow(r) {
   return { id: r.id, codigo: r.codigo, nome: r.nome, descricao: r.descricao, categoria: r.categoria, marca: r.marca, modelo: r.modelo,
     controle: r.controle, localizacao: r.localizacao, conservacao: r.conservacao, ativo: r.ativo, criadoEm: r.criado_em,
+    retiravel: r.retiravel, codigoCompra: r.codigo_compra, patrimonio: r.patrimonio,
     saldo: { total: r.total, disponivel: r.disponivel, emprestada: r.emprestada, emConferencia: r.em_conferencia, manutencao: r.manutencao, baixada: r.baixada },
     foto: r.foto_id ? { id: r.foto_id, largura: r.foto_largura, altura: r.foto_altura } : null };
 }
-async function buscarFerramentas(db, { q = '', situacao = 'ativas', categoria = '', limite = 200 } = {}) {
+// retiravel: só as liberadas para retirada (RM). teto: o máximo aceito em limite (o catálogo do tablet pede mais).
+async function buscarFerramentas(db, { q = '', situacao = 'ativas', categoria = '', limite = 200, retiravel = false, teto = 500 } = {}) {
   const where = [], args = [];
   if (situacao === 'ativas') where.push('f.ativo'); else if (situacao === 'inativas') where.push('NOT f.ativo');
+  if (retiravel) where.push('f.retiravel');
   const termos = texto(q, 80).toLowerCase().split(' ').filter(Boolean).slice(0, 6);
   for (const t of termos) {
     args.push(`%${t.replace(/[\\%_]/g, m => '\\' + m)}%`);
@@ -103,7 +140,7 @@ async function buscarFerramentas(db, { q = '', situacao = 'ativas', categoria = 
   }
   const cat = texto(categoria, 80);
   if (cat) { args.push(cat); where.push(`f.categoria = $${args.length}`); }
-  args.push(Math.min(Math.max(Number(limite) || 200, 1), 500));
+  args.push(Math.min(Math.max(Number(limite) || 200, 1), teto));
   const rows = (await db.query(`SELECT f.*, ${SALDO}, ${FOTO} FROM emprestimo.ferramenta f JOIN emprestimo.ferramenta_saldo s ON s.ferramenta_id = f.id ${COM_FOTO}
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY f.nome, f.codigo LIMIT $${args.length}`, args)).rows;
   return rows.map(ferramentaRow);
@@ -124,7 +161,8 @@ async function enviarFoto(req, res, user, canal) {
 }
 function emprestimoRow(r) {
   const pendente = Number(r.pendente || 0);
-  return { id: r.id, numero: r.numero, colaboradorId: r.colaborador_id, matricula: r.matricula, setor: r.setor, centroCusto: r.centro_custo,
+  // retirada: prazo nulo e nunca "atrasado" (o status aguardando_baixa não está em ABERTOS)
+  return { id: r.id, numero: r.numero, modalidade: r.modalidade, colaboradorId: r.colaborador_id, matricula: r.matricula, setor: r.setor, centroCusto: r.centro_custo,
     atendenteId: r.atendente_id, origem: r.origem, finalidade: r.finalidade, finalidadeRef: r.finalidade_ref, prazo: r.prazo, observacao: r.observacao,
     status: r.status, criadoEm: r.criado_em, encerradoEm: r.encerrado_em, pendente, emConferencia: Number(r.em_conferencia || 0),
     atrasado: ABERTOS.includes(r.status) && pendente > 0 && new Date(r.prazo) < new Date(), itens: Number(r.itens || 0) };
@@ -142,13 +180,14 @@ const RESUMO = `CASE WHEN e.status = 'estornado' THEN 0 ELSE (SELECT coalesce(su
  */
 async function listarEmprestimos(db, f = {}) {
   const where = [], args = [];
-  const aberto = `e.status IN ('${ABERTOS.join("','")}')`;
+  const aberto = `e.status IN ('${ABERTOS_LISTA.join("','")}')`, emAberto = `e.status IN ('${ABERTOS.join("','")}')`;
   if (f.colaboradorId) { args.push(f.colaboradorId); where.push(`e.colaborador_id = $${args.length}`); }
+  if (MODALIDADES.has(f.modalidade)) { args.push(f.modalidade); where.push(`e.modalidade = $${args.length}`); }
   // ferramenta exata (Relatórios): o q é busca por trecho e FER-0001 traria também FER-0001-B
   if (f.ferramentaId) { args.push(f.ferramentaId); where.push(`EXISTS (SELECT 1 FROM emprestimo.emprestimo_item i WHERE i.emprestimo_id = e.id AND i.ferramenta_id = $${args.length})`); }
   if (f.status === 'abertos') where.push(aberto);
   else if (f.status && STATUS.has(f.status)) { args.push(f.status); where.push(`e.status = $${args.length}`); }
-  if (f.atrasados) where.push(`${aberto} AND e.prazo < now() AND EXISTS (SELECT 1 FROM emprestimo.emprestimo_item i WHERE i.emprestimo_id = e.id
+  if (f.atrasados) where.push(`${emAberto} AND e.prazo < now() AND EXISTS (SELECT 1 FROM emprestimo.emprestimo_item i WHERE i.emprestimo_id = e.id
     AND i.quantidade - i.qtd_conferencia - i.qtd_devolvida - i.qtd_baixa > 0)`);
   if (f.de) { args.push(f.de); where.push(`e.criado_em >= ($${args.length}::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'`); }
   if (f.ate) { args.push(f.ate); where.push(`e.criado_em < ($${args.length}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'`); }
@@ -218,7 +257,8 @@ router.get('/ferramentas/:id', handle(async (req, res) => {
   res.json({ ok: true, ferramenta: out });
 }));
 const SALDO_AJUSTE = 'O ajuste deixaria o saldo negativo: confira o disponível e a manutenção na ficha.';
-const CAMPOS_FERRAMENTA = ['codigo', 'nome', 'descricao', 'categoria', 'marca', 'modelo', 'controle', 'localizacao', 'conservacao', 'total', 'unidades', 'ativo'];
+const CAMPOS_FERRAMENTA = ['codigo', 'nome', 'descricao', 'categoria', 'marca', 'modelo', 'controle', 'localizacao', 'conservacao', 'total', 'unidades', 'ativo',
+  'retiravel', 'codigoCompra', 'patrimonio'];
 // Cadastro e edição de ferramenta, ajuste de saldo, configuração e administração de usuários (abaixo) pedem 2FA recente.
 // Incluir unidade (patrimônio) e a foto ficaram fora do portão (revisão de 2026-10-27).
 const stepUpGestao = requireStepUpAdmin(GESTAO);
@@ -226,14 +266,41 @@ router.post('/ferramentas', stepUpGestao, handle(async (req, res) => {
   gestao(req);
   const p = so(req.body, CAMPOS_FERRAMENTA); delete p.ativo;
   textos(p, ['codigo', 'nome', 'descricao', 'categoria', 'marca', 'modelo', 'controle', 'localizacao', 'conservacao']);
+  camposPlanilha(p);
   if (p.total != null) p.total = bruto(p.total);   // cada patrimônio de "unidades" é conferido no banco (texto)
   res.status(201).json({ ok: true, ...await executar(req.user, 'painel', 'ferramenta_salvar', p) });
 }));
+// Importação da planilha de ferramentas (a tela lê o .xlsx no navegador e manda as linhas). Cada linha vira uma ferramenta
+// por quantidade, total 1 (cada código FMNT é uma peça física). Linha fora do formato: 400 com o número da linha e nada
+// gravado; código já cadastrado ou repetido na planilha: ignorado (nunca sobrescreve), listado em "ignoradas".
+// Cadastra ferramentas em lote: mesmo portão de 2FA do cadastro individual.
+const MAX_IMPORTAR = 1000;
+router.post('/ferramentas/importar', stepUpGestao, handle(async (req, res) => {
+  gestao(req);
+  const linhas = req.body?.linhas;
+  if (!Array.isArray(linhas) || !linhas.length || linhas.length > MAX_IMPORTAR) throw fail(400, `Informe de 1 a ${MAX_IMPORTAR} linhas.`);
+  const p = linhas.map((l, i) => {
+    const pre = `Linha ${i + 1}: `;
+    if (!l || typeof l !== 'object' || Array.isArray(l)) throw fail(400, `${pre}Dados inválidos.`);
+    const o = so(l, ['codigo', 'nome', 'categoria', 'localizacao', 'codigoCompra', 'patrimonio', 'retiravel']);
+    for (const k of ['codigo', 'nome', 'categoria', 'localizacao']) if (o[k] != null && typeof o[k] !== 'string' && typeof o[k] !== 'number') throw fail(400, `${pre}Dados inválidos: confira os campos de texto.`);
+    o.codigo = texto(o.codigo, 41).toUpperCase();
+    if (!CODIGO.test(o.codigo)) throw fail(400, `${pre}Código fora do formato (letras, números, ponto, traço, barra; até 40).`);
+    for (const [k, max, rot] of [['nome', 160, 'Descrição'], ['categoria', 80, 'Categoria'], ['localizacao', 120, 'Localização']]) {
+      o[k] = texto(o[k], max + 1);
+      if (o[k].length > max) throw fail(400, `${pre}${rot} com mais de ${max} caracteres.`);
+    }
+    if (!o.nome) throw fail(400, `${pre}Informe a descrição.`);
+    return camposPlanilha(o, pre);
+  });
+  res.json({ ok: true, ...await executar(req.user, 'painel', 'ferramentas_importar', { linhas: p }) });
+}));
 router.put('/ferramentas/:id', stepUpGestao, handle(async (req, res) => {
   gestao(req);
-  const p = so(req.body, ['nome', 'descricao', 'categoria', 'marca', 'modelo', 'localizacao', 'conservacao', 'ativo']);
+  const p = so(req.body, ['nome', 'descricao', 'categoria', 'marca', 'modelo', 'localizacao', 'conservacao', 'ativo', 'retiravel', 'codigoCompra', 'patrimonio']);
   textos(p, ['nome', 'descricao', 'categoria', 'marca', 'modelo', 'localizacao', 'conservacao']);
   ativoDe(p);
+  camposPlanilha(p);
   res.json({ ok: true, ...await executar(req.user, 'painel', 'ferramenta_salvar', { ...p, id: id(req.params.id) }) });
 }));
 router.post('/ferramentas/:id/unidades', handle(async (req, res) => {
@@ -327,7 +394,7 @@ router.get('/emprestimos', handle(async (req, res) => {
   // limite (até 500) e pagina: o relatório do período pede página a página até vir menos que o limite
   const filtro = { status: texto(qs.status, 30), atrasados: qs.atrasados === '1', q: qs.q, setor: qs.setor, centroCusto: qs.centroCusto, matricula: qs.matricula,
     colaboradorId: qs.colaborador ? id(qs.colaborador) : null, ferramentaId: qs.ferramenta ? id(qs.ferramenta) : null, de: dia(qs.de), ate: dia(qs.ate),
-    limite: qs.limite, pagina: qs.pagina };
+    limite: qs.limite, pagina: qs.pagina, modalidade: qs.modalidade };   // modalidade: emprestimo | retirada (fila "aguardando baixa")
   const rows = await emTransacao(req.user, 'painel', async db => {
     const r = await listarEmprestimos(db, filtro);
     const n = await nomes(db, r.flatMap(x => [x.colaboradorId, x.atendenteId]));
@@ -353,10 +420,19 @@ router.post('/emprestimos', handle(async (req, res) => {
   gestao(req);
   const b = req.body || {};
   const p = { colaboradorId: id(b.colaboradorId), itens: itensEmprestimo(b.itens), chave: texto(b.chave, 80), finalidade: texto(b.finalidade, 20) || 'manutencao',
-    finalidadeRef: texto(b.finalidadeRef, 60), observacao: texto(b.observacao, 1000) };
-  if (b.prazo) p.prazo = bruto(b.prazo);
+    finalidadeRef: texto(b.finalidadeRef, 60), observacao: texto(b.observacao, 1000), modalidade: modalidadeDe(b.modalidade) };
+  if (b.prazo && p.modalidade === 'emprestimo') p.prazo = bruto(b.prazo);   // retirada não tem prazo
   const r = await executar(req.user, 'painel', 'emprestar', p);
   res.status(r.repetido ? 200 : 201).json({ ok: true, ...r });
+}));
+// Retirada (RM) aguardando baixa: a gestão confirma (nº da baixa do Dynamics opcional) ou recusa (justificativa; volta ao
+// disponível). Chave de operação opcional, como na conferência: o reenvio devolve o primeiro resultado.
+router.post('/emprestimos/:id/retirada', handle(async (req, res) => {
+  gestao(req);
+  const b = req.body || {};
+  if (b.acao !== 'confirmar' && b.acao !== 'recusar') throw fail(400, 'Informe a ação: confirmar ou recusar.');
+  const p = comChave({ emprestimoId: id(req.params.id), numeroBaixa: texto(b.numeroBaixa, 60), justificativa: texto(b.justificativa, 1000) }, b);
+  res.json({ ok: true, ...await executar(req.user, 'painel', b.acao === 'confirmar' ? 'retirada_confirmar' : 'retirada_recusar', p) });
 }));
 function itensMovimento(v, campos) {
   return lista(v, 30).map(i => { const o = { itemId: id(i?.itemId), quantidade: bruto(i?.quantidade) }; for (const c of campos) if (i[c] != null) o[c] = texto(i[c], 1000); return o; });
@@ -409,4 +485,5 @@ router.put('/config', stepUpGestao, handle(async (req, res) => {
 
 module.exports = router;
 // Reaproveitado pela API do terminal (fase 4): mesmas leituras e escrita, com o canal 'terminal'.
-module.exports._lib = { emTransacao, executar, buscarFerramentas, listarEmprestimos, detalhe, pendenteItem, itensEmprestimo, itensMovimento, enviarFoto, handle, fail, id, texto };
+module.exports._lib = { emTransacao, executar, buscarFerramentas, listarEmprestimos, detalhe, pendenteItem, itensEmprestimo, itensMovimento, enviarFoto, handle, fail, id, texto,
+  modalidadeDe };

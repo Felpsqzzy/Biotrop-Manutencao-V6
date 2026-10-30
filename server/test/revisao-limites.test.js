@@ -127,7 +127,7 @@ test('3. /primeiro-acesso: o 503 sai antes de terminal_reservar_tentativa; reser
   };
   const { srv, url } = await subir();
   try {
-    const st = await Promise.all(Array.from({ length: 40 }, () => post(`${url}/primeiro-acesso`, { matricula: 'T90011', codigo: 'ABCD-EFGH', senha: 'Parafuso#Teste7' })));
+    const st = await Promise.all(Array.from({ length: 40 }, () => post(`${url}/primeiro-acesso`, { matricula: 'T90011', codigo: 'ABCD-EFGH', senha: '615283' })));
     const ocupados = st.filter(s => s === 503).length;
     assert.ok(ocupados > 0, 'a rajada encheu o semáforo');
     assert.equal(n.reserva, 40 - ocupados, 'nenhum 503 depois de reservar');

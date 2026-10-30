@@ -1,5 +1,8 @@
 'use strict';
-// Senha do terminal do almoxarifado (matrícula + senha no tablet) — a única senha que o sistema guarda:
+// Senha do terminal do almoxarifado (matrícula + PIN de 6 dígitos no tablet) — a única senha que o sistema guarda:
+//  • PIN (decisão de 21/10/2026, validarSenha): exatamente 6 dígitos, nem todos iguais, nem sequência (123456, 654321),
+//    nem os 6 últimos dígitos da matrícula. Vale ao definir (primeiro acesso e redefinição); o login confere qualquer
+//    texto até SENHA_MAX com o mesmo trabalho de scrypt (nada muda no tempo de resposta);
 //  • hash scrypt do node:crypto (N=2^17, r=8, p=1, 32 bytes, sal de 16) no formato versionado
 //    scrypt$1$<N>$<r>$<p>$<sal>$<hash>: trocar por Argon2id depois é criar a versão 2 e regravar no próximo login
 //    (precisaRehash);
@@ -41,10 +44,7 @@ const SENHA_MAX = 128;
 const K_CONVITE = chave('terminal-convite');
 const K_IP = chave('terminal-ip');
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // sem 0/O/1/I: ditado ao colaborador sem confusão
-// Senhas que qualquer um tentaria primeiro no tablet (comparadas em minúsculas).
-const COMUNS = new Set(['senha123', 'senha1234', 'senha12345', 'password', 'password1', 'biotrop1', 'biotrop123', 'biotrop2026',
-  'almoxarifado', 'manutencao', 'mudar123', 'trocar123', 'iloveyou', 'abc12345', 'a1b2c3d4']);
-const SEQUENCIAS = ['01234567890', 'abcdefghijklmnopqrstuvwxyz', 'qwertyuiopasdfghjklzxcvbnm', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+const DIGITOS = '0123456789';   // sequências do PIN (e o inverso)
 
 const MAX_CONJUNTOS = 6;   // conjuntos de parâmetros conferidos por login (o atual + os antigos ainda gravados)
 const normalizar = s => String(s).normalize('NFKC');
@@ -139,22 +139,17 @@ function precisaRehash(hash) {
   return !d || d.n !== N || d.r !== R || d.p !== P;
 }
 
-function sequencia(s) {
-  return SEQUENCIAS.some(q => q.includes(s) || [...q].reverse().join('').includes(s));
-}
 /**
- * Regra mínima (decisão de 16/10): 8+ caracteres, nem a matrícula, nem um caractere repetido, nem sequência óbvia.
- * O mínimo conta a senha como ela é gravada (NFKC): "a" + acento combinante digitado em separado vira 1 caractere.
+ * Regra do PIN (decisão de 21/10/2026): exatamente 6 dígitos de 0 a 9 (sem espaço, letra nem dígito de outro alfabeto);
+ * nem todos iguais (111111), nem sequência crescente ou decrescente (012345…456789, 987654…543210), nem igual aos 6
+ * últimos dígitos da matrícula (só quando ela tem 6 dígitos ou mais). null = PIN aceito.
  */
 function validarSenha(senha, matricula = '') {
-  if (typeof senha !== 'string' || [...normalizar(senha)].length < 8) return 'A senha precisa ter pelo menos 8 caracteres.';
-  if (senha.length > SENHA_MAX) return `A senha pode ter no máximo ${SENHA_MAX} caracteres.`;
-  const s = normalizar(senha).toLowerCase();
-  const m = textoDe(matricula).trim().toLowerCase();
-  if (m && (s === m || (m.length >= 4 && s.includes(m)))) return 'A senha não pode ser nem conter a matrícula.';
-  if (/^(.{1,2})\1+$/su.test(s)) return 'A senha não pode ser um caractere (ou par) repetido.';
-  if (sequencia(s)) return 'A senha não pode ser uma sequência (12345678, abcdefgh, qwertyui).';
-  if (COMUNS.has(s)) return 'Essa senha é muito comum: escolha outra.';
+  if (typeof senha !== 'string' || !/^[0-9]{6}$/.test(senha)) return 'O PIN precisa ter exatamente 6 dígitos (só números).';
+  if (/^(\d)\1{5}$/.test(senha)) return 'O PIN não pode ter todos os dígitos iguais.';
+  if (DIGITOS.includes(senha) || [...DIGITOS].reverse().join('').includes(senha)) return 'O PIN não pode ser uma sequência (123456, 654321).';
+  const dig = textoDe(matricula).replace(/[^0-9]/g, '');
+  if (dig.length >= 6 && senha === dig.slice(-6)) return 'O PIN não pode ser igual aos 6 últimos dígitos da matrícula.';
   return null;
 }
 

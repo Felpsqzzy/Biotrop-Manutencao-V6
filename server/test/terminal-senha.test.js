@@ -69,24 +69,22 @@ test('custo antigo ainda gravado (TERMINAL_SCRYPT_LOG2N mudou): quem tem hash an
   assert.deepEqual((await trabalho('x', null, ['scrypt$1$999$8$1', 'bcrypt$2b$10', `scrypt$1$${2 ** 17}$8$1`])).feito, [`${2 ** 17}/8/1`]);
 });
 
-test('texto recebido como objeto estranho ({"toString":1}) não derruba a regra de senha nem o código do convite', () => {
+test('texto recebido como objeto estranho ({"toString":1}) não derruba a regra do PIN nem o código do convite', () => {
   const estranho = { toString: 1 };
-  assert.equal(s.validarSenha('Furadeira#Azul7', estranho), null, 'matrícula estranha vira vazia');
+  assert.equal(s.validarSenha('480613', estranho), null, 'matrícula estranha vira vazia');
   assert.equal(s.hashCodigo(estranho), s.hashCodigo(''), 'código estranho vira vazio');
   assert.equal(s.textoDe(700001), '700001'); assert.equal(s.textoDe(['A1']), ''); assert.equal(s.textoDe(null), '');
 });
 
-test('senha fraca: curta, matrícula, repetida, sequência e comum; senha razoável passa', () => {
-  assert.match(s.validarSenha('abc123', '700001'), /8 caracteres/);
-  assert.match(s.validarSenha(undefined, '700001'), /8 caracteres/);
-  assert.match(s.validarSenha('x'.repeat(129), '700001'), /no máximo 128/);
-  assert.match(s.validarSenha('700001ab', '700001'), /matrícula/);
-  assert.match(s.validarSenha('A70001A70001', 'a70001'), /matrícula/, 'sem diferenciar maiúsculas');
-  assert.match(s.validarSenha('aaaaaaaa'), /repetido/);
-  assert.match(s.validarSenha('12121212'), /repetido/);
-  for (const seq of ['12345678', '87654321', '1234567890', 'abcdefgh', 'HGFEDCBA', 'qwertyui']) assert.match(s.validarSenha(seq), /sequência/, seq);
-  assert.match(s.validarSenha('Senha123'), /comum/);
-  for (const ok of ['Furadeira#Azul7', 'martelo verde 42', 'Chave.Inglesa9', 'açaí-com-banana']) assert.equal(s.validarSenha(ok, '700001'), null, ok);
+test('PIN fora da regra: tamanho, matrícula, repetido e sequência; PIN razoável passa', () => {
+  assert.match(s.validarSenha('12345', '700001'), /6 dígitos/);
+  assert.match(s.validarSenha(undefined, '700001'), /6 dígitos/);
+  assert.match(s.validarSenha('1'.repeat(129), '700001'), /6 dígitos/);
+  assert.match(s.validarSenha('700001', '700001'), /matrícula/);
+  assert.match(s.validarSenha('700001', 'a700001'), /matrícula/, 'só os dígitos da matrícula contam');
+  assert.match(s.validarSenha('999999'), /iguais/);
+  for (const seq of ['123456', '654321', '012345', '987654']) assert.match(s.validarSenha(seq), /sequência/, seq);
+  for (const ok of ['480613', '592816', '121212', '890123']) assert.equal(s.validarSenha(ok, '700001'), null, ok);
 });
 
 test('convite: XXXX-XXXX sem 0/O/1/I; HMAC aceita minúsculas, espaço e sem traço; IP vira HMAC', () => {

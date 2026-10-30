@@ -18,7 +18,9 @@ const MIG = path.resolve(__dirname, '../../database/migrations');
 const API = '/api/emprestimo';
 const HORA = 3600e3;
 const F = {};
-const SENHA = i => `Senha-Cobertura-${i}#9`;
+// PIN fictício por tablet (6 dígitos, fora das regras de recusa)
+const PIN = { t1: '418203', t2: '418257', t3: '529316', t4: '639427', t5: '740538', t6: '851649', c1: '962750', c2: '173861', c3: '284972' };
+const SENHA = i => PIN[i];
 const MAT = { t1: '810001', t2: '810002', t3: '810003', t4: '810004', t5: '810005', t6: '810006', c1: '820001', c2: '820002', c3: '820003', lid: 'L81001' };
 let h, U;
 
@@ -545,7 +547,7 @@ test('convite: colaborador desativado, usuário inativo ou bloqueado no site, id
     r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: '899999', codigo, senha: SENHA('c1') });
     assert.deepEqual([r.s, r.j.erro], [400, MSG_COD], JSON.stringify(codigo)?.slice(0, 40));
   }
-  r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.c1, codigo: k1.j.codigo, senha: ['ArrayDeSenha1'] }); assert.equal(r.s, 400); assert.match(r.j.erro, /8 caracteres/);
+  r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.c1, codigo: k1.j.codigo, senha: ['ArrayDeSenha1'] }); assert.equal(r.s, 400); assert.match(r.j.erro, /6 dígitos/);
   r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.c1, codigo: k1.j.codigo, senha: SENHA('c1') });
   assert.equal(r.s, 200, `o código certo ainda vale depois das tentativas erradas: ${JSON.stringify(r.j)}`);
   r = await t.req('POST', '/api/terminal/primeiro-acesso', { matricula: MAT.c2, codigo: k2.j.codigo, senha: SENHA('c2') });
@@ -662,7 +664,7 @@ test('colaborador desligado com empréstimo aberto: a sessão cai, não entra ne
   assert.equal(dias[0].para, U.t5.email);
   const corpo = (await h.q('SELECT f.corpo_html FROM core.email_fila f JOIN emprestimo.aviso a ON a.email_id = f.id WHERE a.emprestimo_id=$1 AND a.tipo=$2 AND a.janela LIKE $3', [e.id, 'atraso', '%:3'])).rows[0].corpo_html;
   assert.match(corpo, /Estoque grande de cobertura/); assert.doesNotMatch(corpo, /Furadeira de cobertura/, 'só a quantidade pendente aparece');
-  assert.ok(!/810005|CC-t5|Senha-Cobertura/.test(corpo), 'sem matrícula, centro de custo nem senha no e-mail');
+  assert.ok(!/810005|CC-t5|740538/.test(corpo), 'sem matrícula, centro de custo nem senha no e-mail');
   r = await dev({ id: e.id }, [{ itemId: chv.id, quantidade: 1 }]); assert.equal(r.s, 200);
   await conf({ id: e.id }, [{ itemId: chv.id, quantidade: 1, resultado: 'boa' }]);
   assert.equal((await statusDe(e)), 'devolvido');
@@ -1189,8 +1191,8 @@ test('campo de texto recebido como objeto estranho ({"toString":1}) não derruba
     const estranho = { toString: 1 };
     const ruins = await cincoXX([
       ['terminal entrar (matrícula)', 'POST', '/api/terminal/entrar', JSON.stringify({ matricula: estranho, senha: 'x' })],
-      ['terminal primeiro-acesso (matrícula)', 'POST', '/api/terminal/primeiro-acesso', JSON.stringify({ matricula: estranho, codigo: 'x', senha: 'Senha-Boa-777#1' })],
-      ['terminal primeiro-acesso (código)', 'POST', '/api/terminal/primeiro-acesso', JSON.stringify({ matricula: MAT.t1, codigo: estranho, senha: 'Senha-Boa-777#1' })],
+      ['terminal primeiro-acesso (matrícula)', 'POST', '/api/terminal/primeiro-acesso', JSON.stringify({ matricula: estranho, codigo: 'x', senha: '615283' })],
+      ['terminal primeiro-acesso (código)', 'POST', '/api/terminal/primeiro-acesso', JSON.stringify({ matricula: MAT.t1, codigo: estranho, senha: '615283' })],
       ['terminal saida-admin (matrícula)', 'POST', '/api/terminal/saida-admin', JSON.stringify({ matricula: estranho, senha: 'x', codigo: 'x' })],
       ['POST /emprestimos (observação)', 'POST', `${API}/emprestimos`, JSON.stringify({ colaboradorId: U.t1.id, chave: chave(), itens: [{ ferramentaId: F.estoque, quantidade: 1 }], observacao: estranho }), U.alm],
       ['POST /colaboradores (setor)', 'POST', `${API}/colaboradores`, JSON.stringify({ nome: 'Pessoa c3', email: U.c3.email, matricula: MAT.c3, setor: estranho }), U.alm],
@@ -1214,7 +1216,7 @@ test('acesso ao terminal fora de ordem: bloquear duas vezes, desbloquear quem n�
   const conv = () => painel(U.alm, 'POST', `${API}/colaboradores/${U.c1.id}/convite`);
   const acesso = (bloqueado, justificativa = 'Conferido com a pessoa') => painel(U.alm, 'POST', `${API}/colaboradores/${U.c1.id}/acesso`, { bloqueado, justificativa });
   const situacao = async () => (await painel(U.alm, 'GET', `${API}/colaboradores?q=${MAT.c1}`)).j.rows[0].acesso.situacao;
-  const nova = 'Senha-Nova-Cobertura#52';
+  const nova = '836152';
   assert.equal((await tablet().entrar(MAT.c1, SENHA('c1'))).s, 200, 'c1 entra com a senha de antes');
   // convite de redefinição: a senha antiga já não vale e a pessoa fica "convite pendente"
   let r = await conv(); assert.equal(r.s, 201); assert.equal(r.j.redefinicao, true); const k1 = r.j.codigo;
