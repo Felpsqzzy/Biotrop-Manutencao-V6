@@ -43,9 +43,31 @@ const http: Transporte = async (metodo, url, corpo) => {
   }
 };
 
+/**
+ * Demo da V5 (prévia da Vercel e ?demo=1): o terminal.html da V5 carrega antes o web/src/almox/emprestimo-demo.js, que
+ * responde no lugar de /api/terminal com os mesmos dados do painel. Fora dele (ou na VM, que nem leva o arquivo): null.
+ */
+interface DemoV5 {
+  ativo?: () => unknown;
+  handle?: (metodo: string, url: string, corpo?: unknown) => Promise<{ status: number; json: unknown }>;
+}
+function demoV5(): Transporte | null {
+  const d = (globalThis as { BIOTROP_EMPRESTIMO_DEMO?: DemoV5 }).BIOTROP_EMPRESTIMO_DEMO;
+  try {
+    if (d && typeof d.handle === 'function' && d.ativo?.() === true) {
+      const handle = d.handle;
+      return (metodo, url, corpo) => handle(metodo, url, corpo);
+    }
+  } catch {
+    /* demo quebrado: segue com a rede */
+  }
+  return null;
+}
+
 let atual: Promise<Transporte> | null = null;
 function transporte(): Promise<Transporte> {
-  if (!atual) atual = MODO_DEMO ? import('./demo').then((m) => m.demoTerminal.handle) : Promise.resolve(http);
+  if (!atual)
+    atual = MODO_DEMO ? import('./demo').then((m) => m.demoTerminal.handle) : Promise.resolve(demoV5() ?? http);
   return atual;
 }
 

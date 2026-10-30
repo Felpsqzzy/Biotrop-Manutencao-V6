@@ -255,7 +255,7 @@ export function TelaEntrada() {
   );
 }
 
-type AlvoPrimeiro = 'pSenha' | 'pSenha2';
+type AlvoPrimeiro = 'pMat' | 'pSenha' | 'pSenha2';
 
 export function TelaPrimeiro() {
   const { chamar, aguardarLimpeza, abrirSessao, ir, adminAberto } = useTerminal();
@@ -263,7 +263,8 @@ export function TelaPrimeiro() {
   const [codigo, setCodigo] = useState('');
   const [s1, setS1] = useState('');
   const [s2, setS2] = useState('');
-  const [alvo, setAlvo] = useState<AlvoPrimeiro>('pSenha');
+  const [alvo, setAlvo] = useState<AlvoPrimeiro>('pMat');
+  const [letras, setLetras] = useState(false);
   const [erro, setErro] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [tremor, setTremor] = useState(0);
@@ -280,6 +281,12 @@ export function TelaPrimeiro() {
 
   function tecla(k: string) {
     if (erro) setErro('');
+    if (alvo === 'pMat') {
+      setMat((v) =>
+        k === 'apagar' ? v.slice(0, -1) : k === 'limpar' ? '' : v.length < 20 && /^[0-9A-Za-z]$/.test(k) ? v + k : v,
+      );
+      return;
+    }
     const [v, set] = alvo === 'pSenha' ? [s1, setS1] : [s2, setS2];
     if (!/^(\d|apagar|limpar)$/.test(k)) return;
     const novo = k === 'apagar' ? v.slice(0, -1) : k === 'limpar' ? '' : v.length < PIN ? v + k : v;
@@ -353,14 +360,15 @@ export function TelaPrimeiro() {
           <input
             ref={refMat}
             id="tm-p-mat"
-            className="tm-campo"
-            inputMode="text"
+            className={`tm-campo tm-campo--mat${alvo === 'pMat' ? ' is-alvo' : ''}`}
+            inputMode={letras ? 'text' : 'none'}
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
             maxLength={20}
             placeholder="Sua matrícula"
             value={mat}
+            onFocus={() => setAlvo('pMat')}
             onChange={(e) => {
               if (preenchidoPeloNavegador(e.currentTarget)) {
                 setMat('');
@@ -409,7 +417,10 @@ export function TelaPrimeiro() {
             aoEnviar={() => void enviar()}
           />
         </div>
-        <Teclado rotulo="Teclado numérico do PIN novo" aoTecla={tecla} />
+        <Teclado rotulo="Teclado numérico da matrícula e do PIN novo" aoTecla={tecla} />
+        <button type="button" className="tm-link tm-link--mini" onClick={() => setLetras((v) => !v)}>
+          {letras ? 'Usar o teclado numérico da tela' : 'Minha matrícula tem letras'}
+        </button>
         <ul className="tm-checagem" aria-live="polite">
           {regras.map((r) => (
             <li key={r.texto} className={r.ok ? 'is-ok' : ''}>

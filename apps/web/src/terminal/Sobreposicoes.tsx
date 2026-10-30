@@ -33,14 +33,15 @@ export function AvisoInatividade() {
   );
 }
 
-type AlvoAdm = 'senha' | 'codigo';
+type AlvoAdm = 'mat' | 'senha' | 'codigo';
 
 function FormAdmin({ aoCancelar }: { aoCancelar: () => void }) {
   const { chamar, aguardarLimpeza, voltarInicio } = useTerminal();
   const [mat, setMat] = useState('');
   const [senha, setSenha] = useState('');
   const [codigo, setCodigo] = useState('');
-  const [alvo, setAlvo] = useState<AlvoAdm>('senha');
+  const [alvo, setAlvo] = useState<AlvoAdm>('mat');
+  const [letras, setLetras] = useState(false);
   const [erro, setErro] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [tremor, setTremor] = useState(0);
@@ -49,6 +50,12 @@ function FormAdmin({ aoCancelar }: { aoCancelar: () => void }) {
 
   function tecla(k: string) {
     if (erro) setErro('');
+    if (alvo === 'mat') {
+      setMat((v) =>
+        k === 'apagar' ? v.slice(0, -1) : k === 'limpar' ? '' : v.length < 20 && /^[0-9A-Za-z]$/.test(k) ? v + k : v,
+      );
+      return;
+    }
     const [v, set] = alvo === 'senha' ? [senha, setSenha] : [codigo, setCodigo];
     if (!/^(\d|apagar|limpar)$/.test(k)) return;
     const novo = k === 'apagar' ? v.slice(0, -1) : k === 'limpar' ? '' : v.length < PIN ? v + k : v;
@@ -96,7 +103,9 @@ function FormAdmin({ aoCancelar }: { aoCancelar: () => void }) {
         <input
           ref={refMat}
           id="tm-adm-mat"
-          className="tm-campo"
+          className={`tm-campo${alvo === 'mat' ? ' is-alvo' : ''}`}
+          inputMode={letras ? 'text' : 'none'}
+          onFocus={() => setAlvo('mat')}
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
@@ -137,6 +146,9 @@ function FormAdmin({ aoCancelar }: { aoCancelar: () => void }) {
         />
       </div>
       <Teclado rotulo="Teclado numérico da saída administrativa" aoTecla={tecla} />
+      <button type="button" className="tm-link tm-link--mini" onClick={() => setLetras((v) => !v)}>
+        {letras ? 'Usar o teclado numérico da tela' : 'Minha matrícula tem letras'}
+      </button>
       <MensagemErro texto={erro} />
       <div className="tm-acoes">
         <Botao className="tm-botao-grande" onClick={aoCancelar}>

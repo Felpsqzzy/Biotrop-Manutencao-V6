@@ -10,6 +10,7 @@ import { TelaMeus } from './Meus';
 import { TelaInicio, TelaModulos } from './Modulos';
 import { TelaRevisao, TelaSucesso } from './Revisao';
 import { AvisoInatividade, SaidaAdmin, Saindo } from './Sobreposicoes';
+import { useTelaCheia } from './telaCheia';
 import { Topo } from './Topo';
 
 const TELAS: Record<Tela, () => ReactNode> = {
@@ -55,6 +56,7 @@ function Casca() {
 }
 
 export function Terminal() {
+  useTelaCheia();
   return (
     <TerminalProvider>
       <Casca />

@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '../ui';
-import { definirTransporte, type Transporte } from './api';
+import { chamar, definirTransporte, erroDe, type Transporte } from './api';
 import { Terminal } from './App';
 import { criarDemo } from './demo';
 
@@ -413,5 +413,92 @@ describe('terminal', () => {
     const folha = await screen.findByRole('dialog');
     expect(folha.querySelector('.tm-etiquetas--virtual')).toBeTruthy();
     expect(within(folha).queryAllByRole('button', { name: /PAT-V/ }).length).toBeLessThan(150);
+  });
+});
+
+describe('demo da V5 (window.BIOTROP_EMPRESTIMO_DEMO)', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, 'BIOTROP_EMPRESTIMO_DEMO');
+    definirTransporte(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('ativo: a chamada vai para handle(método, url, corpo), sem rede, com o mesmo tratamento de resposta e erro', async () => {
+    const rede = vi.fn();
+    vi.stubGlobal('fetch', rede);
+    const handle = vi.fn((_m: string, url: string) =>
+      Promise.resolve(
+        url.endsWith('/eu')
+          ? { status: 200, json: { ok: true, colaborador: { nome: '[TESTE]' } } }
+          : { status: 400, json: { ok: false, erro: 'O PIN precisa ter exatamente 6 dígitos (só números).' } },
+      ),
+    );
+    Object.assign(globalThis, { BIOTROP_EMPRESTIMO_DEMO: { ativo: () => true, handle } });
+    definirTransporte(null);
+    const eu = await chamar('GET', '/eu');
+    expect(eu.ok).toBe(true);
+    const corpo = { matricula: '10421', codigo: 'ABCD-EFGH', senha: '12' };
+    const r = await chamar('POST', '/primeiro-acesso', corpo);
+    expect([r.ok, r.status, erroDe(r)]).toEqual([false, 400, 'O PIN precisa ter exatamente 6 dígitos (só números).']);
+    expect(handle).toHaveBeenNthCalledWith(1, 'GET', '/api/terminal/eu', undefined);
+    expect(handle).toHaveBeenNthCalledWith(2, 'POST', '/api/terminal/primeiro-acesso', corpo);
+    expect(rede).not.toHaveBeenCalled();
+  });
+
+  it('inativo (VM, ou fora da prévia): segue com o fetch de /api/terminal', async () => {
+    const rede = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    vi.stubGlobal('fetch', rede);
+    const handle = vi.fn();
+    Object.assign(globalThis, { BIOTROP_EMPRESTIMO_DEMO: { ativo: () => false, handle } });
+    definirTransporte(null);
+    expect((await chamar('GET', '/eu')).ok).toBe(true);
+    expect(handle).not.toHaveBeenCalled();
+    expect(rede).toHaveBeenCalledWith('/api/terminal/eu', expect.objectContaining({ method: 'GET' }));
+  });
+});
+
+describe('terminal no tablet: tela cheia e teclado da tela', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, 'fullscreenElement');
+    Reflect.deleteProperty(document.documentElement, 'requestFullscreen');
+  });
+
+  it('pede tela cheia no toque, não repete em tela cheia e pede de novo se o tablet sair dela', () => {
+    const pedir = vi.fn(() => Promise.resolve());
+    Object.defineProperty(document.documentElement, 'requestFullscreen', { value: pedir, configurable: true });
+    montar();
+    expect(pedir).not.toHaveBeenCalled();
+    fireEvent.pointerUp(document.body);
+    expect(pedir).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, 'fullscreenElement', { value: document.documentElement, configurable: true });
+    fireEvent.pointerUp(document.body);
+    expect(pedir).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+    fireEvent.pointerUp(document.body);
+    expect(pedir).toHaveBeenCalledTimes(2);
+  });
+
+  it('matrícula e PIN não abrem o teclado do tablet (entrada, primeiro acesso e saída administrativa)', async () => {
+    montar();
+    const semNativo = (el: HTMLElement) => expect(el.getAttribute('inputmode')).toBe('none');
+    semNativo(screen.getByLabelText('Matrícula'));
+    const pin = screen.getByLabelText(/^PIN,/);
+    semNativo(pin);
+    expect(pin.hasAttribute('readonly')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Primeiro acesso/ }));
+    const mat = await screen.findByLabelText('Matrícula');
+    semNativo(mat);
+    const teclado = screen.getByRole('group', { name: /Teclado numérico/ });
+    for (const d of '104') fireEvent.click(within(teclado).getByRole('button', { name: d }));
+    expect((mat as HTMLInputElement).value).toBe('104');
+    // código do convite tem letras (ABCD-EFGH): fica com o teclado do tablet, só ao tocar
+    expect(screen.getByLabelText('Código do convite').getAttribute('inputmode')).not.toBe('none');
+    fireEvent.click(screen.getByRole('button', { name: 'Minha matrícula tem letras' }));
+    expect(mat.getAttribute('inputmode')).toBe('text');
+
+    fireEvent.keyDown(document, { key: 'S', code: 'KeyS', ctrlKey: true, altKey: true, shiftKey: true });
+    const dlg = await screen.findByRole('dialog', { name: 'Liberar o tablet' });
+    semNativo(within(dlg).getByLabelText('Matrícula'));
   });
 });

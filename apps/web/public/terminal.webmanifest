@@ -1,0 +1,14 @@
+{
+  "id": "/terminal",
+  "name": "Terminal do Almoxarifado · BIOMANUT",
+  "short_name": "Terminal",
+  "icons": [
+    { "src": "/icons/android-chrome-192x192.png?v=20261007", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/android-chrome-512x512.png?v=20261007", "sizes": "512x512", "type": "image/png" }
+  ],
+  "start_url": "/terminal",
+  "scope": "/terminal",
+  "theme_color": "#00634e",
+  "background_color": "#eef5f2",
+  "display": "fullscreen"
+}
