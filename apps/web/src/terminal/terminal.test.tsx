@@ -502,3 +502,90 @@ describe('terminal no tablet: tela cheia e teclado da tela', () => {
     semNativo(within(dlg).getByLabelText('Matrícula'));
   });
 });
+
+describe('terminal no tablet: tela sempre acesa (Wake Lock)', () => {
+  type TravaFalsa = EventTarget & { released: boolean; release: () => Promise<void> };
+  function travaFalsa(recusar = 0) {
+    const travas: TravaFalsa[] = [];
+    const cair = (t: TravaFalsa) => {
+      if (t.released) return;
+      t.released = true;
+      t.dispatchEvent(new Event('release'));
+    };
+    const request = vi.fn(async () => {
+      if (recusar > 0) {
+        recusar--;
+        throw new DOMException('sem gesto', 'NotAllowedError');
+      }
+      const t = new EventTarget() as TravaFalsa;
+      t.released = false;
+      t.release = vi.fn(async () => cair(t));
+      travas.push(t);
+      return t;
+    });
+    Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true });
+    return { request, travas, cair };
+  }
+  const oculta = (sim: boolean) => {
+    Object.defineProperty(document, 'hidden', { value: sim, configurable: true });
+    fireEvent(document, new Event('visibilitychange'));
+  };
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'wakeLock');
+    Reflect.deleteProperty(document, 'hidden');
+  });
+
+  it('pede ao abrir, pede de novo quando o sistema solta e ao voltar a aba, e solta ao fechar', async () => {
+    const wl = travaFalsa();
+    montar();
+    await waitFor(() => expect(wl.request).toHaveBeenCalledTimes(1));
+    expect(wl.request).toHaveBeenCalledWith('screen');
+    // toque com a trava de pé não pede outra
+    fireEvent.pointerUp(document.body);
+    await act(async () => {});
+    expect(wl.request).toHaveBeenCalledTimes(1);
+
+    // o sistema soltou (bateria, etc.) com a aba visível: pede outra
+    act(() => wl.cair(wl.travas[0]!));
+    await waitFor(() => expect(wl.request).toHaveBeenCalledTimes(2));
+
+    // aba oculta: o sistema solta e não adianta pedir; ao voltar, pede
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    act(() => wl.cair(wl.travas[1]!));
+    oculta(true);
+    await act(async () => {});
+    expect(wl.request).toHaveBeenCalledTimes(2);
+    oculta(false);
+    await waitFor(() => expect(wl.request).toHaveBeenCalledTimes(3));
+
+    cleanup();
+    expect(wl.travas[2]!.release).toHaveBeenCalledTimes(1);
+    expect(wl.travas[2]!.released).toBe(true);
+    await act(async () => {});
+    expect(wl.request).toHaveBeenCalledTimes(3);
+  });
+
+  it('recusado ao abrir (sem gesto): pede no primeiro toque ou tecla; pagehide solta sem pedir de novo', async () => {
+    const wl = travaFalsa(2);
+    montar();
+    await waitFor(() => expect(wl.request).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(document, { key: '1' });
+    await waitFor(() => expect(wl.request).toHaveBeenCalledTimes(2));
+    fireEvent.pointerUp(document.body);
+    await waitFor(() => expect(wl.travas).toHaveLength(1));
+    expect(wl.request).toHaveBeenCalledTimes(3);
+
+    fireEvent(window, new Event('pagehide'));
+    expect(wl.travas[0]!.released).toBe(true);
+    await act(async () => {});
+    expect(wl.request).toHaveBeenCalledTimes(3);
+  });
+
+  it('navegador sem Wake Lock (ou fora de HTTPS): o terminal abre normal', () => {
+    expect('wakeLock' in navigator).toBe(false);
+    expect(() => montar()).not.toThrow();
+    expect(screen.getByLabelText('Matrícula')).toBeTruthy();
+    fireEvent.pointerUp(document.body);
+    oculta(false);
+  });
+});

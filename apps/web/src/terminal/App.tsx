@@ -10,6 +10,7 @@ import { TelaMeus } from './Meus';
 import { TelaInicio, TelaModulos } from './Modulos';
 import { TelaRevisao, TelaSucesso } from './Revisao';
 import { AvisoInatividade, SaidaAdmin, Saindo } from './Sobreposicoes';
+import { useTelaAtiva } from './telaAtiva';
 import { useTelaCheia } from './telaCheia';
 import { Topo } from './Topo';
 
@@ -57,6 +58,7 @@ function Casca() {
 
 export function Terminal() {
   useTelaCheia();
+  useTelaAtiva();
   return (
     <TerminalProvider>
       <Casca />
