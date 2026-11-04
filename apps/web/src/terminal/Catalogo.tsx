@@ -410,7 +410,7 @@ export function TelaCatalogo() {
               aoMudar={mudarVista}
               compacto
               opcoes={[
-                { id: 'cards', texto: 'Cartões', icone: <IconeTm nome="grade" tamanho={20} /> },
+                { id: 'cards', texto: 'Cards', icone: <IconeTm nome="grade" tamanho={20} /> },
                 { id: 'lista', texto: 'Lista', icone: <IconeTm nome="lista" tamanho={20} /> },
               ]}
             />

@@ -3,16 +3,32 @@
  * condição; avaria pede descrição), revisa e confirma. A chave da devolução é uma por empréstimo e só troca depois que
  * o servidor confirma; se o primeiro envio ficou sem resposta e o reenvio mudou, a tela avisa que valeu o primeiro.
  * "Sem almoxarife no turno" (49: noite e fim de semana) marca a devolução e a conferência fica para o próximo.
+ * Migration 50: fotos da devolução obrigatórias (1 a 5), ao lado das miniaturas de como as ferramentas saíram; depois
+ * de registrada, "Conferir agora com o almoxarife" (co-assinatura + resultado de cada item; avaria e recusa abrem
+ * divergência com foto) ou deixa para a conferência no site.
  */
 import { useEffect, useState } from 'react';
-import { Badge, Botao, EmptyState, Icone } from '../ui';
-import { erroDe } from './api';
+import { Badge, Botao, EmptyState, Icone, useToast } from '../ui';
+import { erroDe, lista } from './api';
+import { Coassinatura } from './Coassinatura';
 import { Aceite, CabecalhoTela, Carregando, CheckDesenhado, Contador, Segmento, useToqueProtegido } from './comum';
 import { useTerminal, type ItemDevolvido, type SelDev } from './estado';
+import { Fotos, FotosRegistradas } from './Fotos';
 import { IconeTm } from './icones';
-import { aberto, dataHora, devolviveis, ehRM, num, novaChave, plural, prazoInfo, texto } from './regras';
+import {
+  aberto,
+  dataHora,
+  devolviveis,
+  ehRM,
+  MAX_FOTOS_DIVERGENCIA,
+  num,
+  novaChave,
+  plural,
+  prazoInfo,
+  texto,
+} from './regras';
 import { MensagemErro } from './teclado';
-import type { Emprestimo } from './tipos';
+import type { Coassinatura as Assinatura, Emprestimo, FotoEnviada, FotoRegistro } from './tipos';
 
 const TOM_FAIXA = { ok: 'ok', aviso: 'aviso', ruim: 'ruim', info: 'info', neutro: 'neutro' } as const;
 
@@ -91,7 +107,7 @@ export function TelaDevolver() {
                 variante="acao"
                 className="tm-botao-grande"
                 onClick={() => {
-                  setDev({ id: e.id, sel: {}, de: 'devolver' });
+                  setDev({ id: e.id, sel: {}, de: 'devolver', fotos: [] });
                   ir('devolver-itens');
                 }}
               >
@@ -250,12 +266,27 @@ export function TelaDevolverRevisao() {
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
   const [semAlmoxarife, setSemAlmoxarife] = useState(false);
+  const [saida, setSaida] = useState<FotoRegistro[]>([]);
+  const id = e?.id;
+  // como as ferramentas saíram (fotos da entrega), para comparar com a devolução
+  useEffect(() => {
+    if (!id) return;
+    let vivo = true;
+    void chamar('GET', `/emprestimos/${encodeURIComponent(id)}/fotos`).then((r) => {
+      if (vivo && !r.velho && r.ok) setSaida(lista<FotoRegistro>(r.json.rows).filter((f) => f.etapa === 'entrega'));
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [id, chamar]);
   if (!dev || !e) return null;
   const itens = itensDevolvidos(e, dev.sel);
+  const fotos = dev.fotos;
 
   async function confirmar() {
     const k = e && chavesDev.current[e.id];
     if (enviando || !e || !k) return;
+    if (!fotos.length) return setErro('Tire pelo menos uma foto do que está devolvendo.');
     const corpoItens = itens.map((i) => ({
       itemId: i.itemId,
       quantidade: i.quantidade,
@@ -269,6 +300,7 @@ export function TelaDevolverRevisao() {
     const r = await chamar('POST', `/emprestimos/${encodeURIComponent(e.id)}/devolucoes`, {
       chave: k.chave,
       itens: corpoItens,
+      fotoIds: fotos.map((f) => f.fotoId),
       ...(semAlmoxarife ? { semAlmoxarife: true } : {}),
     });
     if (r.velho) return;
@@ -285,10 +317,12 @@ export function TelaDevolverRevisao() {
     }
     const repetido = r.json.repetido === true;
     setResultadoDev({
+      emprestimoId: e.id,
       numero: e.numero,
       repetido,
       itens,
       outra: repetido && k.incerto != null && k.incerto !== conteudo,
+      semAlmoxarife,
     });
     delete chavesDev.current[e.id];
     setDev(null);
@@ -321,6 +355,21 @@ export function TelaDevolverRevisao() {
           </li>
         ))}
       </ul>
+      <FotosRegistradas fotos={saida} rotulo="Como saíram" />
+      <div className="tm-campo-bloco">
+        <span className="tm-rotulo">Fotos da devolução (obrigatórias)</span>
+        <Fotos
+          etapa="devolucao"
+          rotulo="Fotos da devolução"
+          fotos={fotos}
+          desligado={enviando}
+          aoAdicionar={(f: FotoEnviada) => {
+            setErro('');
+            setDev((d) => (d ? { ...d, fotos: [...d.fotos, f] } : d));
+          }}
+          aoRemover={(fid) => setDev((d) => (d ? { ...d, fotos: d.fotos.filter((f) => f.fotoId !== fid) } : d))}
+        />
+      </div>
       <div className="bm-vidro tm-fechamento">
         <p className="tm-prazo tm-prazo--info">
           <Icone nome="info" tamanho={22} /> Deixe as ferramentas no balcão: o almoxarifado confere a devolução.
@@ -337,7 +386,7 @@ export function TelaDevolverRevisao() {
           <Botao
             variante="acao"
             className="tm-botao-grande"
-            disabled={enviando}
+            disabled={enviando || !fotos.length}
             aria-busy={enviando}
             onClick={() => void confirmar()}
           >
@@ -395,6 +444,11 @@ export function TelaDevolverOk() {
       <p className="tm-prazo tm-prazo--info">
         <Icone nome="info" tamanho={22} /> Aguardando a conferência do almoxarifado.
       </p>
+      {!resultadoDev.semAlmoxarife && (
+        <Botao className="tm-botao-grande" onClick={protegido(() => ir('conferencia'))}>
+          <IconeTm nome="assinar" tamanho={22} /> Conferir agora com o almoxarife
+        </Botao>
+      )}
       <div className="tm-acoes tm-acoes--fim">
         <Botao className="tm-botao-grande" onClick={protegido(() => ir('inicio'))}>
           <Icone nome="inicio" tamanho={22} /> Voltar ao início
@@ -403,6 +457,184 @@ export function TelaDevolverOk() {
           <Icone nome="sair" tamanho={22} /> Terminar e sair
         </Botao>
       </div>
+    </section>
+  );
+}
+
+type Resultado = 'boa' | 'avaria' | 'recusada';
+interface Conferido {
+  resultado: Resultado;
+  descricao: string;
+  fotos: FotoEnviada[];
+}
+
+/**
+ * Conferência no ato (50): o almoxarife co-assina (matrícula + PIN, finalidade conferência) e marca cada item devolvido:
+ * boa, avaria ou recusada; avaria e recusada abrem divergência com descrição e foto (1 a 3). POST
+ * /emprestimos/:id/conferencia-no-ato com a chave própria (reenvio não duplica). A co-assinatura vale 3 min.
+ */
+export function TelaConferencia() {
+  const { resultadoDev, ir, chamar, setOcupado, carregarAbertos } = useTerminal();
+  const toast = useToast();
+  const [assinatura, setAssinatura] = useState<Assinatura | null>(null);
+  const [conf, setConf] = useState<Record<string, Conferido>>({});
+  const [chave] = useState(novaChave);
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState('');
+  if (!resultadoDev) return null;
+  const r0 = resultadoDev;
+  const de = (id: string): Conferido => conf[id] ?? { resultado: 'boa', descricao: '', fotos: [] };
+  const mudar = (id: string, fn: (c: Conferido) => Conferido) => {
+    setErro('');
+    setConf((m) => ({ ...m, [id]: fn(m[id] ?? { resultado: 'boa', descricao: '', fotos: [] }) }));
+  };
+
+  async function enviar() {
+    if (enviando || !assinatura) return;
+    if (Date.parse(assinatura.expiraEm) <= Date.now()) {
+      setAssinatura(null);
+      return setErro('A confirmação do almoxarife venceu (3 minutos). Peça para ele digitar de novo.');
+    }
+    for (const i of r0.itens) {
+      const c = de(i.itemId);
+      if (c.resultado === 'boa') continue;
+      if (texto(c.descricao).length < 5)
+        return setErro(`Descreva o problema de ${i.descricao} (pelo menos 5 caracteres).`);
+      if (!c.fotos.length) return setErro(`Tire uma foto do problema de ${i.descricao}.`);
+    }
+    const ruins = r0.itens.filter((i) => de(i.itemId).resultado !== 'boa');
+    const corpo = {
+      coassinaturaId: assinatura.coassinaturaId,
+      chave,
+      itens: r0.itens.map((i) => {
+        const c = de(i.itemId);
+        return {
+          itemId: i.itemId,
+          quantidade: i.quantidade,
+          resultado: c.resultado,
+          ...(c.resultado !== 'boa' ? { observacao: texto(c.descricao) } : {}),
+        };
+      }),
+      ...(ruins.length
+        ? {
+            divergencias: ruins.map((i) => {
+              const c = de(i.itemId);
+              return {
+                itemId: i.itemId,
+                tipo: c.resultado === 'avaria' ? 'danificado' : 'outra',
+                descricao: texto(c.descricao),
+                fotoIds: c.fotos.map((f) => f.fotoId),
+              };
+            }),
+          }
+        : {}),
+    };
+    setErro('');
+    setEnviando(true);
+    setOcupado(true);
+    const r = await chamar('POST', `/emprestimos/${encodeURIComponent(r0.emprestimoId)}/conferencia-no-ato`, corpo);
+    if (r.velho) return;
+    setOcupado(false);
+    setEnviando(false);
+    if (!r.ok) return setErro(erroDe(r));
+    toast.mostrar({ texto: `Conferência de ${r0.numero} registrada.`, tom: 'ok' });
+    carregarAbertos();
+    ir('inicio');
+  }
+
+  return (
+    <section className="tm-tela">
+      <CabecalhoTela
+        titulo={`Conferir ${r0.numero}`}
+        sub={
+          assinatura
+            ? `Conferência de ${assinatura.nome || 'almoxarife'}.`
+            : 'O almoxarife confirma com a matrícula e o PIN dele.'
+        }
+        voltar={() => ir('devolver-ok')}
+        bloqueado={enviando}
+      />
+      {!assinatura ? (
+        <Coassinatura finalidade="conferencia" aoConfirmar={setAssinatura} />
+      ) : (
+        <>
+          <ul className="tm-linhas">
+            {r0.itens.map((i) => {
+              const c = de(i.itemId);
+              return (
+                <li key={i.itemId} className="bm-painel tm-dev is-marcado">
+                  <span className="tm-linha__textos">
+                    <b>{i.descricao}</b>
+                    <small>
+                      <span className="tm-cod">{i.codigo}</span> · × {num(i.quantidade)}
+                    </small>
+                  </span>
+                  <div className="tm-dev__detalhe">
+                    <Segmento<Resultado>
+                      rotulo={`Resultado de ${i.descricao}`}
+                      valor={c.resultado}
+                      aoMudar={(v) => mudar(i.itemId, (x) => ({ ...x, resultado: v }))}
+                      opcoes={[
+                        { id: 'boa', texto: 'Boa' },
+                        { id: 'avaria', texto: 'Avaria' },
+                        { id: 'recusada', texto: 'Recusada' },
+                      ]}
+                    />
+                    {c.resultado !== 'boa' && (
+                      <>
+                        <label className="tm-campo-bloco tm-dev__obs">
+                          <span className="tm-rotulo">O que há de errado?</span>
+                          <textarea
+                            className="tm-campo tm-campo--texto"
+                            maxLength={1000}
+                            rows={2}
+                            value={c.descricao}
+                            onChange={(ev) => {
+                              const v = ev.currentTarget.value;
+                              mudar(i.itemId, (x) => ({ ...x, descricao: v }));
+                            }}
+                          />
+                        </label>
+                        <Fotos
+                          etapa="conferencia"
+                          rotulo={`Fotos do problema de ${i.descricao}`}
+                          max={MAX_FOTOS_DIVERGENCIA}
+                          fotos={c.fotos}
+                          aoAdicionar={(f) => mudar(i.itemId, (x) => ({ ...x, fotos: [...x.fotos, f] }))}
+                          aoRemover={(fid) =>
+                            mudar(i.itemId, (x) => ({ ...x, fotos: x.fotos.filter((f) => f.fotoId !== fid) }))
+                          }
+                        />
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <MensagemErro texto={erro} />
+          <div className="tm-acoes">
+            <Botao
+              variante="acao"
+              className="tm-botao-grande"
+              disabled={enviando}
+              aria-busy={enviando}
+              onClick={() => void enviar()}
+            >
+              {enviando ? (
+                <>
+                  <span className="tm-giro" aria-hidden="true" /> Registrando…
+                </>
+              ) : (
+                <>
+                  <Icone nome="check" tamanho={22} /> Registrar conferência
+                </>
+              )}
+            </Botao>
+          </div>
+        </>
+      )}
+      {!assinatura && <MensagemErro texto={erro} />}
     </section>
   );
 }

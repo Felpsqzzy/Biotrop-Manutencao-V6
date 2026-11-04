@@ -50,6 +50,8 @@ const ICONES = {
   historico: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5', 'M12 7v5l4 2'],
   trocar: ['m16 3 4 4-4 4', 'M20 7H4', 'm8 21-4-4 4-4', 'M4 17h16'],
   separado: ['c 12 12 9', 'm8.5 12 2.5 2.5 4.5-5'],
+  camera: ['M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z', 'c 12 13 3.5'],
+  assinar: ['c 9 7 4', 'M2 21v-1a6 6 0 0 1 6-6h2', 'm16 19 2 2 4-4'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type NomeIconeTm = keyof typeof ICONES;

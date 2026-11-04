@@ -6,20 +6,55 @@
  * mais de 100 ferramentas (lista virtualizada), a CAMM de cada uma (?camm= filtra), finalidade, termo, prazo do fim do
  * turno (/prazo), dupla confirmação (um empréstimo do balcão esperando o "recebi"; /recebimento), "sem almoxarife no
  * turno", empréstimos abertos e atrasados e uma retirada (RM) antiga, só no histórico.
+ * Migration 50: conta de terceiro (empresa fictícia) com autorização do líder (/lideres, /autorizacoes; decidir() e
+ * expirar() fazem o papel do site nos testes), fotos (/fotos, rascunho até anexar), co-assinatura do almoxarife
+ * (/coassinatura, 3 min, uso único, nunca o tomador), recebimento conferido ou com divergência (bloqueia o "recebi"
+ * até resolverDivergencias()), devolução com fotos e conferência no ato.
  * O estado vive só nesta página (recarregar volta ao começo).
  */
 import { problemaPin } from './regras';
-import type { Emprestimo, Entrega, Ferramenta, ItemEmprestimo, Modulo } from './tipos';
+import type {
+  Autorizacao,
+  Divergencia,
+  Emprestimo,
+  Entrega,
+  EntregaVia,
+  Ferramenta,
+  ItemEmprestimo,
+  Modulo,
+  RecebimentoSituacao,
+} from './tipos';
 
 interface Pessoa {
   id: string;
   nome: string;
   matricula: string;
   setor: string;
-  perfil: 'tecnico' | 'almoxarife' | 'admin';
+  perfil: 'tecnico' | 'almoxarife' | 'admin' | 'lider' | 'gestor' | 'terceiro';
   pin: string | null;
   convite?: string;
   codigo2fa?: string;
+  empresa?: string;
+}
+interface AutDemo extends Autorizacao {
+  solicitanteId: string;
+  liderId: string;
+  chave: string;
+}
+interface FotoDemo {
+  id: string;
+  dono: string;
+  etapa: string;
+  miniatura: string;
+  emprestimoId: string | null;
+}
+interface CoassDemo {
+  id: string;
+  nome: string;
+  tomadorId: string;
+  finalidade: string;
+  expira: number;
+  usada: boolean;
 }
 interface FerrDemo extends Omit<Ferramenta, 'saldo' | 'unidadesDisponiveis'> {
   total: number;
@@ -42,6 +77,11 @@ interface EmpDemo extends Emprestimo {
   /** Nasceu com a dupla confirmação (49); os anteriores ficam false. */
   duplaConfirmacao: boolean;
   semAlmoxarife: boolean;
+  entregaVia?: EntregaVia;
+  entreguePor?: string;
+  recebimentoSituacao?: RecebimentoSituacao;
+  divergencias: Divergencia[];
+  conferencias: string[];
 }
 
 export interface CredencialDemo {
@@ -131,6 +171,17 @@ function estadoInicial(agora: number) {
       pin: '847362',
       codigo2fa: '135790',
     },
+    {
+      id: 'p6',
+      nome: '[DEMO] Montagens Fictícias Ltda',
+      matricula: 'T9001',
+      setor: 'Empresa terceira',
+      perfil: 'terceiro',
+      pin: '362918',
+      empresa: '[DEMO] Montagens Fictícias Ltda',
+    },
+    { id: 'p7', nome: '[DEMO] Lúcia Campos', matricula: '20110', setor: 'Liderança', perfil: 'lider', pin: '705318' },
+    { id: 'p8', nome: '[DEMO] Rafael Gomes', matricula: '20120', setor: 'Gestão', perfil: 'gestor', pin: '904127' },
   ];
   const ferramentas: FerrDemo[] = [];
   const unidades: UnidadeDemo[] = [];
@@ -235,6 +286,8 @@ function estadoInicial(agora: number) {
       chave: `demo-${seq}-inicial`,
       itensLista: [],
       devolucoes: [],
+      divergencias: [],
+      conferencias: [],
       // do terminal, com a dupla confirmação: recebido na hora e entregue (confirmado pelo almoxarife)
       duplaConfirmacao: modalidade === 'emprestimo',
       semAlmoxarife: false,
@@ -291,6 +344,8 @@ function estadoInicial(agora: number) {
     finalidadeRef: '',
     camm: 'CAMM 2',
     recebimentoEm: null,
+    entregaVia: 'painel',
+    entreguePor: '[DEMO] Bruno Teles',
   });
   // retirada (RM) antiga: só no histórico
   registrar('p1', 'retirada', agora - 5 * DIA, [['FER-D010', 1]], { status: 'encerrado', quando: agora - 4 * DIA });
@@ -300,8 +355,52 @@ function estadoInicial(agora: number) {
     devolvida: true,
   });
   registrar('p2', 'emprestimo', agora - 2 * DIA, [['FER-D012', 1]]);
-  return { pessoas, ferramentas, unidades, emprestimos, seq: () => id('x') };
+  // conta de terceiro: uma autorização aprovada (retirar agora) e uma recusada, com o líder fictício
+  const trena = porCodigo('FER-D011');
+  const autorizacoes: AutDemo[] = [
+    {
+      id: id('a'),
+      numero: 'AUT-D00001',
+      status: 'aprovada',
+      solicitanteId: 'p6',
+      liderId: 'p7',
+      chave: 'demo-aut-1',
+      terceiroEmpresa: '[DEMO] Montagens Fictícias Ltda',
+      terceiroPessoa: '[DEMO] Marcos Lima',
+      liderNome: '[DEMO] Lúcia Campos',
+      camm: 'CAMM 3',
+      finalidadeRef: '',
+      itens: [{ ferramentaId: trena.id, unidadeId: null, codigo: trena.codigo, descricao: trena.nome, quantidade: 1 }],
+      expiraEm: new Date(prazoTurno(agora)).toISOString(),
+      decididoEm: new Date(agora - H / 2).toISOString(),
+      decisaoJustificativa: null,
+    },
+    {
+      id: id('a'),
+      numero: 'AUT-D00002',
+      status: 'recusada',
+      solicitanteId: 'p6',
+      liderId: 'p7',
+      chave: 'demo-aut-2',
+      terceiroEmpresa: '[DEMO] Montagens Fictícias Ltda',
+      terceiroPessoa: '[DEMO] Paula Souza',
+      liderNome: '[DEMO] Lúcia Campos',
+      camm: 'CAMM 1',
+      finalidadeRef: '',
+      itens: [{ ferramentaId: trena.id, unidadeId: null, codigo: trena.codigo, descricao: trena.nome, quantidade: 2 }],
+      expiraEm: new Date(prazoTurno(agora)).toISOString(),
+      decididoEm: new Date(agora - H).toISOString(),
+      decisaoJustificativa: 'Serviço não programado para hoje.',
+    },
+  ];
+  const fotos: FotoDemo[] = [];
+  const coassinaturas: CoassDemo[] = [];
+  return { pessoas, ferramentas, unidades, emprestimos, autorizacoes, fotos, coassinaturas, seq: () => id('x') };
 }
+
+/** Miniatura fictícia (1 px) das fotos já anexadas no demo. */
+const MINI_DEMO = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+const TIPOS_DIV = ['danificado', 'quantidade_divergente', 'incompleto', 'outra'];
 
 const ok = (status: number, json: Record<string, unknown> = {}) => ({ status, json: { ok: true, ...json } });
 const falha = (status: number, erro: string) => ({ status, json: { ok: false, erro } });
@@ -323,7 +422,13 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
           .trim()
           .toUpperCase(),
     );
-  const colaborador = (p: Pessoa) => ({ nome: p.nome, matricula: p.matricula, setor: p.setor });
+  const colaborador = (p: Pessoa) => ({
+    nome: p.nome,
+    matricula: p.matricula,
+    setor: p.setor,
+    tipo: p.perfil === 'terceiro' ? 'terceiro' : 'interno',
+    ...(p.empresa ? { empresa: p.empresa } : {}),
+  });
   const abrir = (p: Pessoa) => {
     sessao = p.id;
     return ok(200, { colaborador: colaborador(p), inatividadeSegundos: INATIVIDADE, prazoPadraoHoras: PRAZO_HORAS });
@@ -392,7 +497,83 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       entrega: entregaDe(e),
       entregaEm: e.entregaEm,
       recebimentoEm: e.recebimentoEm,
+      entregaVia: e.entregaVia ?? '',
+      entreguePor: e.entreguePor ?? '',
+      semAlmoxarife: e.semAlmoxarife,
+      recebimentoSituacao: e.recebimentoSituacao ?? (e.recebimentoEm ? 'ok' : ''),
+      divergencias: e.divergencias.map((d) => ({ ...d })),
+      terceiroPessoa: e.terceiroPessoa,
+      autorizacaoId: e.autorizacaoId ?? null,
+      autorizacaoNumero: e.autorizacaoNumero,
+      divergenciasAbertas: e.divergencias.filter((d) => d.status === 'aberta').length,
     };
+  };
+  /** Autorização vista pela conta: pendente/aprovada vencida vira expirada (como a expiração preguiçosa do banco). */
+  const expirarVencidas = (agora: number) => {
+    for (const a of s.autorizacoes)
+      if ((a.status === 'pendente' || a.status === 'aprovada') && Date.parse(String(a.expiraEm)) <= agora)
+        a.status = 'expirada';
+  };
+  const linhaAut = (a: AutDemo): Autorizacao => ({
+    id: a.id,
+    numero: a.numero,
+    status: a.status,
+    terceiroEmpresa: a.terceiroEmpresa,
+    terceiroPessoa: a.terceiroPessoa,
+    liderNome: a.liderNome,
+    itens: a.itens.map((i) => ({ ...i })),
+    expiraEm: a.expiraEm,
+    decididoEm: a.decididoEm,
+    decisaoJustificativa: a.decisaoJustificativa,
+    criadoEm: a.criadoEm,
+    emprestimoId: a.emprestimoId ?? null,
+    camm: a.camm,
+    finalidadeRef: a.finalidadeRef,
+  });
+  /** Rascunhos de foto do próprio colaborador, da etapa, ainda não anexados: os ids ou o erro. */
+  const fotosRascunho = (dono: string, ids: unknown, etapas: string[], min: number, max: number) => {
+    const l = Array.isArray(ids) ? ids.map(String) : [];
+    if (l.length < min || l.length > max || new Set(l).size !== l.length) return null;
+    const achadas = l.map((fid) =>
+      s.fotos.find((f) => f.id === fid && f.dono === dono && etapas.includes(f.etapa) && !f.emprestimoId),
+    );
+    return achadas.every(Boolean) ? (achadas as FotoDemo[]) : null;
+  };
+  /** Divergências do corpo (tipo, descrição 5..1000, 1 a 3 fotos): a lista pronta ou a mensagem de erro. */
+  const lerDivergencias = (
+    dono: string,
+    v: unknown,
+    etapa: Divergencia['etapa'],
+  ): { erro: string } | { lista: { d: Divergencia; fotos: FotoDemo[] }[] } => {
+    const l = Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+    if (!l.length) return { erro: 'Registre pelo menos uma divergência.' };
+    const out: { d: Divergencia; fotos: FotoDemo[] }[] = [];
+    for (const x of l) {
+      if (!TIPOS_DIV.includes(String(x.tipo))) return { erro: 'Tipo de divergência inválido.' };
+      const descricao = String(x.descricao ?? '').trim();
+      if (descricao.length < 5 || descricao.length > 1000)
+        return { erro: 'Descreva a divergência (pelo menos 5 caracteres).' };
+      if (x.quantidade != null && !(Number.isInteger(Number(x.quantidade)) && Number(x.quantidade) > 0))
+        return { erro: 'Informe quantas peças têm problema ou faltam.' };
+      const f = fotosRascunho(dono, x.fotoIds, ['divergencia', 'conferencia'], 1, 3);
+      if (!f) return { erro: 'Cada divergência precisa de 1 a 3 fotos.' };
+      out.push({
+        d: {
+          id: s.seq(),
+          itemId: x.itemId ? String(x.itemId) : null,
+          etapa,
+          tipo: String(x.tipo),
+          descricao,
+          quantidade: x.quantidade == null ? null : Number(x.quantidade),
+          status: 'aberta',
+        },
+        fotos: f,
+      });
+    }
+    return { lista: out };
+  };
+  const anexar = (fs: FotoDemo[], e: EmpDemo) => {
+    for (const f of fs) f.emprestimoId = e.id;
   };
 
   function rota(metodo: string, url: string, b: Record<string, unknown>) {
@@ -479,6 +660,181 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       if (!e) return falha(404, 'Empréstimo não encontrado.');
       return ok(200, { emprestimo: linhaEmp(e, agora) });
     }
+    if (metodo === 'GET' && caminho === 'lideres')
+      return ok(200, {
+        rows: s.pessoas
+          .filter((p) => p.perfil === 'lider' || p.perfil === 'gestor')
+          .map((p) => ({ id: p.id, nome: p.nome })),
+      });
+    if (metodo === 'POST' && caminho === 'fotos') {
+      const etapa = String(b.etapa ?? '');
+      if (!['entrega', 'devolucao', 'divergencia', 'conferencia'].includes(etapa))
+        return falha(400, 'Etapa da foto inválida.');
+      const img = String(b.imagem ?? '');
+      const mini = String(b.miniatura ?? '');
+      if (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || !/^data:image\/jpeg;base64,/.test(mini))
+        return falha(400, 'Foto em formato inválido (use JPG, PNG ou WEBP).');
+      if (img.length > 1600040) return falha(400, 'Foto grande demais.');
+      const f: FotoDemo = { id: s.seq(), dono: eu.id, etapa, miniatura: mini, emprestimoId: null };
+      s.fotos.push(f);
+      return ok(201, { fotoId: f.id });
+    }
+    if (metodo === 'POST' && caminho === 'coassinatura') {
+      const fin = String(b.finalidade ?? '');
+      if (fin !== 'entrega' && fin !== 'conferencia') return falha(400, 'Finalidade da confirmação inválida.');
+      const p = pessoa(b.matricula);
+      // 401 genérico: matrícula, PIN, perfil fora (técnico, líder, terceiro) ou o próprio tomador
+      if (
+        !p ||
+        !p.pin ||
+        p.pin !== String(b.senha ?? '') ||
+        !['almoxarife', 'gestor', 'admin'].includes(p.perfil) ||
+        p.id === eu.id
+      )
+        return falha(401, 'Matrícula ou PIN inválidos.');
+      const c: CoassDemo = {
+        id: s.seq(),
+        nome: p.nome,
+        tomadorId: eu.id,
+        finalidade: fin,
+        expira: agora + 3 * 60e3,
+        usada: false,
+      };
+      s.coassinaturas.push(c);
+      return ok(200, { coassinaturaId: c.id, nome: c.nome, expiraEm: new Date(c.expira).toISOString() });
+    }
+    if (metodo === 'GET' && caminho === 'autorizacoes') {
+      expirarVencidas(agora);
+      const abertas = u.searchParams.get('situacao') === 'abertas';
+      return ok(200, {
+        rows: s.autorizacoes
+          .filter((a) => a.solicitanteId === eu.id && (!abertas || ['pendente', 'aprovada'].includes(a.status)))
+          .slice()
+          .reverse()
+          .map(linhaAut),
+      });
+    }
+    if (metodo === 'POST' && caminho === 'autorizacoes') {
+      const chave = String(b.chave ?? '');
+      if (!CHAVE_OP.test(chave)) return falha(400, 'Chave de operação inválida.');
+      const rep = s.autorizacoes.find((a) => a.solicitanteId === eu.id && a.chave === chave);
+      if (rep)
+        return ok(200, { id: rep.id, numero: rep.numero, status: rep.status, expiraEm: rep.expiraEm, repetido: true });
+      if (eu.perfil !== 'terceiro') return falha(403, 'Só a conta da empresa terceira pede autorização no tablet.');
+      const pessoaT = String(b.terceiroPessoa ?? '').trim();
+      if (pessoaT.length < 3 || pessoaT.length > 120) return falha(400, 'Informe o nome de quem vai retirar.');
+      const lider = s.pessoas.find((p) => p.id === b.liderId && (p.perfil === 'lider' || p.perfil === 'gestor'));
+      if (!lider) return falha(400, 'Escolha um líder válido.');
+      const camm = String(b.camm ?? '');
+      if (camm && !CAMMS.includes(camm)) return falha(400, 'CAMM inválida: use CAMM 1, CAMM 2, CAMM 3 ou C. LOG.');
+      const itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
+      if (!itens.length || itens.length > 30) return falha(400, 'Escolha de 1 a 30 ferramentas.');
+      const snap: Autorizacao['itens'] = [];
+      for (const it of itens) {
+        const f = s.ferramentas.find((x) => x.id === it.ferramentaId);
+        if (!f) return falha(400, 'Ferramenta não encontrada.');
+        const linha = linhaFerr(f);
+        const un = f.controle === 'individual' ? linha.unidadesDisponiveis?.find((x) => x.id === it.unidadeId) : null;
+        if (f.controle === 'individual' && !un)
+          return falha(409, `A unidade escolhida de ${f.nome} não está mais disponível.`);
+        const q = un ? 1 : Number(it.quantidade);
+        if (!un && (!(q >= 1) || q > Number(linha.saldo?.disponivel)))
+          return falha(409, `Saldo insuficiente de ${f.nome}. Confira a lista de novo.`);
+        snap.push({
+          ferramentaId: f.id,
+          unidadeId: un?.id ?? null,
+          codigo: f.codigo,
+          descricao: un ? `${f.nome} (${un.identificador})` : f.nome,
+          quantidade: q,
+        });
+      }
+      const a: AutDemo = {
+        id: s.seq(),
+        numero: `AUT-D${String(s.autorizacoes.length + 1).padStart(5, '0')}`,
+        status: 'pendente',
+        solicitanteId: eu.id,
+        liderId: lider.id,
+        chave,
+        terceiroEmpresa: eu.empresa ?? eu.nome,
+        terceiroPessoa: pessoaT,
+        liderNome: lider.nome,
+        camm,
+        finalidadeRef: String(b.finalidadeRef ?? '')
+          .trim()
+          .slice(0, 60),
+        itens: snap,
+        expiraEm: new Date(prazoTurno(agora)).toISOString(),
+        decididoEm: null,
+        decisaoJustificativa: null,
+        criadoEm: new Date(agora).toISOString(),
+        emprestimoId: null,
+      };
+      s.autorizacoes.push(a);
+      return ok(201, { id: a.id, numero: a.numero, status: a.status, expiraEm: a.expiraEm, repetido: false });
+    }
+    if (metodo === 'POST' && partes[0] === 'autorizacoes' && partes.length === 3 && partes[2] === 'cancelar') {
+      expirarVencidas(agora);
+      const a = s.autorizacoes.find((x) => x.id === partes[1] && x.solicitanteId === eu.id);
+      if (!a) return falha(404, 'Autorização não encontrada.');
+      if (String(b.justificativa ?? '').trim().length < 5)
+        return falha(400, 'Diga por que está cancelando (pelo menos 5 caracteres).');
+      if (a.status !== 'pendente') return falha(409, 'Esta autorização já foi decidida ou venceu.');
+      a.status = 'cancelada';
+      return ok(200, { id: a.id, status: a.status });
+    }
+    if (metodo === 'GET' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'fotos') {
+      const e = s.emprestimos.find((x) => x.id === partes[1] && x.colaboradorId === eu.id);
+      if (!e) return falha(404, 'Empréstimo não encontrado.');
+      return ok(200, {
+        rows: s.fotos
+          .filter((f) => f.emprestimoId === e.id)
+          .map((f) => ({ id: f.id, v: f.id, etapa: f.etapa, miniatura: f.miniatura || MINI_DEMO })),
+      });
+    }
+    if (metodo === 'POST' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'conferencia-no-ato') {
+      const e = s.emprestimos.find((x) => x.id === partes[1] && x.colaboradorId === eu.id);
+      if (!e) return falha(404, 'Empréstimo não encontrado.');
+      const chave = String(b.chave ?? '');
+      if (!CHAVE_OP.test(chave)) return falha(400, 'Chave de operação inválida.');
+      if (e.conferencias.includes(chave)) return ok(200, { id: e.id, repetido: true });
+      const c = s.coassinaturas.find((x) => x.id === b.coassinaturaId);
+      if (!c || c.usada || c.expira <= agora || c.tomadorId !== eu.id || c.finalidade !== 'conferencia')
+        return falha(409, 'A confirmação do almoxarife venceu ou já foi usada. Peça para ele digitar de novo.');
+      const itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
+      if (!itens.length) return falha(400, 'Informe o resultado de cada item.');
+      const ruins = itens.filter((v) => v.resultado !== 'boa');
+      let divs: { d: Divergencia; fotos: FotoDemo[] }[] = [];
+      if (ruins.length) {
+        const r = lerDivergencias(eu.id, b.divergencias, 'devolucao');
+        if ('erro' in r) return falha(400, `Avaria ou recusa: ${r.erro}`);
+        divs = r.lista;
+      }
+      for (const v of itens) {
+        const it = e.itensLista.find((i) => i.id === v.itemId);
+        if (!it || !(Number(v.quantidade) >= 1) || Number(v.quantidade) > Number(it.emConferencia))
+          return falha(409, 'Quantidade em conferência diferente. Confira de novo.');
+        if (v.resultado === 'boa' && e.divergencias.some((d) => d.status === 'aberta' && d.itemId === it.id))
+          return falha(409, 'Este item tem divergência aberta: a conferência boa espera a resolução.');
+      }
+      c.usada = true;
+      for (const v of itens) {
+        const it = e.itensLista.find((i) => i.id === v.itemId)!;
+        const q = Number(v.quantidade);
+        it.emConferencia = Number(it.emConferencia) - q;
+        it.devolvida = Number(it.devolvida) + q;
+        const f = s.ferramentas.find((x) => x.id === it.ferramentaId);
+        if (f) f.emConferencia -= q;
+        const un = s.unidades.find((x) => x.id === it.unidadeId);
+        if (un) un.estado = 'disponivel';
+      }
+      for (const x of divs) {
+        e.divergencias.push(x.d);
+        anexar(x.fotos, e);
+      }
+      e.conferencias.push(chave);
+      recalcular(e, agora);
+      return ok(200, { id: e.id, repetido: false });
+    }
     if (metodo === 'POST' && caminho === 'emprestimos') {
       const chave = String(b.chave ?? '');
       if (!CHAVE_OP.test(chave)) return falha(400, 'Chave de operação inválida.');
@@ -489,27 +845,78 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
           numero: rep.numero,
           itens: rep.itensLista.length,
           prazo: rep.prazo,
+          entrega: entregaDe(rep),
+          recebimentoSituacao: rep.recebimentoSituacao ?? '',
           repetido: true,
         });
       // como a rota e emprestimo.executar() (49): só empréstimo, finalidade, número em OM e TPM, CAMM e o termo
       if (b.modalidade === 'retirada')
         return falha(400, 'Retirada sem devolução não é mais feita aqui: registre um empréstimo.');
-      const itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
+      let itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
+      // com autorização e sem itens, vale o snapshot que o líder aprovou
+      const autPedida = b.autorizacaoId
+        ? s.autorizacoes.find((a) => a.id === b.autorizacaoId && a.solicitanteId === eu.id)
+        : undefined;
+      if (!itens.length && autPedida) itens = autPedida.itens.map((i) => ({ ...i }));
       if (itens.some((i) => i && (i.materialCodigo != null || !i.ferramentaId)))
         return falha(400, 'O terminal empresta só ferramentas. Material é retirado no balcão do almoxarifado.');
       if (!itens.length) return falha(400, 'Escolha pelo menos uma ferramenta.');
       if (itens.length > 30) return falha(400, 'Até 30 ferramentas por retirada.');
       const fin = String(b.finalidade ?? '');
-      const ref = String(b.finalidadeRef ?? '')
+      // com autorização, CAMM e referência vêm dela
+      const ref = String((autPedida ? autPedida.finalidadeRef : b.finalidadeRef) ?? '')
         .trim()
         .slice(0, 60);
       if (!fin) return falha(400, 'Informe a finalidade: OM, CAPEX, TPM, empresa terceira ou outra.');
       if (!FINALIDADES.includes(fin))
         return falha(400, 'Finalidade inválida: use OM, CAPEX, TPM, empresa terceira ou outra.');
       if ((fin === 'om' || fin === 'tpm') && !ref) return falha(400, `Informe o número da ${fin.toUpperCase()}.`);
-      const camm = b.camm == null ? '' : String(b.camm);
+      const camm = autPedida ? String(autPedida.camm ?? '') : b.camm == null ? '' : String(b.camm);
       if (camm && !CAMMS.includes(camm)) return falha(400, 'CAMM inválida: use CAMM 1, CAMM 2, CAMM 3 ou C. LOG.');
       if (b.termoAceito !== true) return falha(400, 'Aceite o termo de responsabilidade para retirar.');
+      // 50: empresa terceira só pela conta da empresa, com a autorização aprovada (itens iguais ao snapshot)
+      expirarVencidas(agora);
+      let aut: AutDemo | undefined;
+      if (eu.perfil === 'terceiro' || fin === 'terceira') {
+        if (eu.perfil !== 'terceiro' || fin !== 'terceira')
+          return falha(400, 'Empresa terceira só pela conta da empresa, com a autorização do líder.');
+        aut = autPedida;
+        if (!aut) return falha(409, 'Retirada de terceiro só com autorização aprovada pelo líder.');
+        if (aut.status !== 'aprovada')
+          return falha(409, `Autorização ${aut.numero} ${aut.status === 'expirada' ? 'venceu' : 'não está aprovada'}.`);
+        const snap = (l: { ferramentaId?: unknown; unidadeId?: unknown; quantidade?: unknown }[]) =>
+          JSON.stringify(
+            l.map((i) => [String(i.ferramentaId ?? ''), String(i.unidadeId ?? ''), Number(i.quantidade) || 0]).sort(),
+          );
+        if (snap(itens) !== snap(aut.itens)) return falha(409, 'Os itens não são os que o líder aprovou.');
+      }
+      const fotosEntrega = fotosRascunho(eu.id, b.fotosEntrega, ['entrega'], 1, 5);
+      if (!fotosEntrega) return falha(400, 'Tire de 1 a 5 fotos das ferramentas na entrega.');
+      let coass: CoassDemo | undefined;
+      if (b.coassinaturaId && b.semAlmoxarife === true)
+        return falha(400, 'Escolha: confirmação do almoxarife ou "sem almoxarife no turno", não os dois.');
+      if (b.coassinaturaId) {
+        coass = s.coassinaturas.find((x) => x.id === b.coassinaturaId);
+        if (
+          !coass ||
+          coass.usada ||
+          coass.expira <= agora ||
+          coass.tomadorId !== eu.id ||
+          coass.finalidade !== 'entrega'
+        )
+          return falha(409, 'A confirmação do almoxarife venceu ou já foi usada. Peça para ele digitar de novo.');
+      } else if (b.semAlmoxarife !== true)
+        return falha(400, 'Falta a confirmação do almoxarife (ou marque "sem almoxarife no turno").');
+      // recebimento opcional: sem ele, fica pendente (o "recebi" depois, em Confirmar recebimento)
+      const rec = b.recebimento == null ? null : (b.recebimento as Record<string, unknown>);
+      let divs: { d: Divergencia; fotos: FotoDemo[] }[] = [];
+      if (rec?.divergencias != null) {
+        const r = lerDivergencias(eu.id, rec.divergencias, 'retirada');
+        if ('erro' in r) return falha(400, r.erro);
+        divs = r.lista;
+      } else if (rec && rec.conferido !== true)
+        return falha(400, 'Confirme que recebeu e conferiu as ferramentas, ou registre a divergência.');
+      const recebido = !!rec && !divs.length;
       for (const it of itens) {
         const f = s.ferramentas.find((x) => x.id === it.ferramentaId);
         if (!f) return falha(400, 'Ferramenta não encontrada.');
@@ -536,11 +943,19 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
         finalidade: fin,
         finalidadeRef: fin === 'capex' ? '' : ref,
         camm,
-        // no terminal o termo aceito é o "recebi"; falta o almoxarife confirmar a entrega
+        // 50: entrega pela co-assinatura (ou pendente, sem almoxarife); recebimento declarado ou com divergência
         duplaConfirmacao: true,
-        semAlmoxarife: b.semAlmoxarife === true,
-        entregaEm: null,
-        recebimentoEm: new Date(agora).toISOString(),
+        semAlmoxarife: !coass,
+        entregaEm: coass ? new Date(agora).toISOString() : null,
+        entregaVia: coass ? 'tablet' : '',
+        entreguePor: coass?.nome ?? '',
+        recebimentoEm: recebido ? new Date(agora).toISOString() : null,
+        recebimentoSituacao: divs.length ? 'divergencia' : recebido ? 'ok' : '',
+        divergencias: [],
+        conferencias: [],
+        terceiroPessoa: aut?.terceiroPessoa,
+        autorizacaoId: aut?.id,
+        autorizacaoNumero: aut?.numero,
       };
       for (const it of itens) {
         const f = s.ferramentas.find((x) => x.id === it.ferramentaId)!;
@@ -563,17 +978,56 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
         });
       }
       s.emprestimos.push(e);
-      return ok(201, { id: e.id, numero: e.numero, itens: e.itensLista.length, prazo: e.prazo, repetido: false });
+      if (coass) coass.usada = true;
+      if (aut) {
+        aut.status = 'utilizada';
+        aut.emprestimoId = e.id;
+      }
+      anexar(fotosEntrega, e);
+      for (const x of divs) {
+        e.divergencias.push(x.d);
+        anexar(x.fotos, e);
+      }
+      return ok(201, {
+        id: e.id,
+        numero: e.numero,
+        itens: e.itensLista.length,
+        prazo: e.prazo,
+        entrega: entregaDe(e),
+        recebimentoSituacao: e.recebimentoSituacao,
+        repetido: false,
+      });
     }
     if (metodo === 'POST' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'recebimento') {
       const e = s.emprestimos.find((x) => x.id === partes[1] && x.colaboradorId === eu.id);
       if (!e) return falha(404, 'Empréstimo não encontrado.');
-      if (e.recebimentoEm) return ok(200, { id: e.id, recebimentoEm: e.recebimentoEm, repetido: true });
+      if (e.recebimentoEm)
+        return ok(200, { id: e.id, recebimentoSituacao: 'ok', recebimentoEm: e.recebimentoEm, repetido: true });
       if (entregaDe(e) !== 'aguardando_colaborador')
         return falha(409, 'Este empréstimo não pede confirmação de recebimento.');
+      if (b.divergencias != null) {
+        const r = lerDivergencias(eu.id, b.divergencias, 'retirada');
+        if ('erro' in r) return falha(400, r.erro);
+        for (const x of r.lista) {
+          e.divergencias.push(x.d);
+          anexar(x.fotos, e);
+        }
+        e.recebimentoSituacao = 'divergencia';
+        return ok(200, { id: e.id, recebimentoEm: null, recebimentoSituacao: 'divergencia', repetido: false });
+      }
       if (b.termoAceito !== true) return falha(400, 'Aceite o termo de responsabilidade para confirmar o recebimento.');
+      if (b.conferido !== true) return falha(400, 'Confirme que conferiu a quantidade e as condições.');
+      // a entrega ficou sem foto (balcão): o "recebi" leva de 1 a 5
+      const semFoto = !s.fotos.some((f) => f.emprestimoId === e.id && f.etapa === 'entrega');
+      const fotosRec =
+        b.fotoIds == null && !semFoto ? [] : fotosRascunho(eu.id, b.fotoIds, ['entrega'], semFoto ? 1 : 0, 5);
+      if (!fotosRec) return falha(400, 'Tire pelo menos uma foto do que recebeu.');
+      if (e.divergencias.some((d) => d.status === 'aberta' && d.etapa === 'retirada'))
+        return falha(409, 'Há divergência aberta neste empréstimo: aguarde o almoxarifado resolver.');
       e.recebimentoEm = new Date(agora).toISOString();
-      return ok(200, { id: e.id, recebimentoEm: e.recebimentoEm, repetido: false });
+      e.recebimentoSituacao = 'ok';
+      anexar(fotosRec, e);
+      return ok(200, { id: e.id, recebimentoSituacao: 'ok', recebimentoEm: e.recebimentoEm, repetido: false });
     }
     if (metodo === 'POST' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'devolucoes') {
       const chave = String(b.chave ?? '');
@@ -585,6 +1039,8 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       if (e.devolucoes.includes(chave)) return ok(200, { id: e.id, numero: e.numero, repetido: true });
       const itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
       if (!itens.length) return falha(400, 'Marque pelo menos uma ferramenta.');
+      const fotosDev = fotosRascunho(eu.id, b.fotoIds, ['devolucao'], 1, 5);
+      if (!fotosDev) return falha(400, 'Tire de 1 a 5 fotos do que está devolvendo.');
       for (const v of itens) {
         const it = e.itensLista.find((i) => i.id === v.itemId);
         if (!it) return falha(400, 'Item não encontrado neste empréstimo.');
@@ -609,6 +1065,8 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
         if (un) un.estado = 'em_conferencia';
       }
       e.devolucoes.push(chave);
+      anexar(fotosDev, e);
+      e.semAlmoxarife = e.semAlmoxarife || b.semAlmoxarife === true;
       recalcular(e, agora);
       return ok(200, { id: e.id, numero: e.numero });
     }
@@ -626,7 +1084,7 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
         matricula: p.matricula,
         pin: p.pin,
         nome: p.nome,
-        papel: p.perfil === 'tecnico' ? 'Colaborador' : p.perfil === 'admin' ? 'Administração' : 'Almoxarifado',
+        papel: PAPEL[p.perfil],
         convite: p.convite,
         codigo2fa: p.codigo2fa,
       }));
@@ -635,7 +1093,39 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       s = estadoInicial(relogio());
       sessao = null;
     },
+    /** O líder decide no site (só nos testes e no demo). */
+    decidir(numero: string, decisao: 'aprovar' | 'recusar', justificativa = '') {
+      const a = s.autorizacoes.find((x) => x.numero === numero);
+      if (!a || a.status !== 'pendente') return false;
+      a.status = decisao === 'aprovar' ? 'aprovada' : 'recusada';
+      a.decididoEm = new Date(relogio()).toISOString();
+      a.decisaoJustificativa = decisao === 'recusar' ? justificativa : null;
+      if (decisao === 'aprovar') a.expiraEm = new Date(prazoTurno(relogio())).toISOString();
+      return true;
+    },
+    /** O turno acabou para esta autorização. */
+    expirar(numero: string) {
+      const a = s.autorizacoes.find((x) => x.numero === numero);
+      if (a) a.expiraEm = new Date(relogio() - 1000).toISOString();
+    },
+    /** A gestão resolveu as divergências do empréstimo (o "recebi" volta a valer). */
+    resolverDivergencias(numero: string) {
+      const e = s.emprestimos.find((x) => x.numero === numero);
+      for (const d of e?.divergencias ?? []) d.status = 'resolvida';
+    },
+    numeroDe(id: string) {
+      return s.emprestimos.find((x) => x.id === id)?.numero ?? '';
+    },
   };
 }
+
+const PAPEL: Record<Pessoa['perfil'], string> = {
+  tecnico: 'Colaborador',
+  admin: 'Administração',
+  almoxarife: 'Almoxarifado',
+  lider: 'Líder (aprova no site)',
+  gestor: 'Gestão',
+  terceiro: 'Empresa terceira',
+};
 
 export const demoTerminal = criarDemo();

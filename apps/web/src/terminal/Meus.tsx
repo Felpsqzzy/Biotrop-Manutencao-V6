@@ -3,6 +3,8 @@
  * a finalidade, a CAMM e o estado da entrega (dupla confirmação, 49): o que espera o "recebi" leva a "Confirmar
  * recebimento". A API devolve até 200 registros; passou disso ("cortado"), a tela avisa que os mais antigos ficaram de fora. Mais de 100 na aba, a
  * lista é virtualizada (só os registros à vista vão para o DOM).
+ * Migration 50: quem entregou (tablet ou site), o recebimento com divergência, as divergências (abertas e resolvidas),
+ * a autorização usada e, na conta de terceiro, a pessoa que retirou em cada registro.
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
@@ -22,7 +24,9 @@ import {
   plural,
   textoEntrega,
   textoFinalidade,
+  textoRecebimento,
   textoStatus,
+  textoTipoDivergencia,
   tomStatus,
 } from './regras';
 import type { Emprestimo } from './tipos';
@@ -40,7 +44,9 @@ const TOM: Record<ReturnType<typeof tomStatus>, TomBadge> = {
 function Registro({ e, aoDevolver, aoReceber }: { e: Emprestimo; aoDevolver?: () => void; aoReceber?: () => void }) {
   const rm = ehRM(e);
   const meta = [textoFinalidade(e.finalidade, e.finalidadeRef), e.camm].filter(Boolean).join(' · ');
-  const entrega = aberto(e) ? textoEntrega(e) : '';
+  const entrega = aberto(e) || e.entrega === 'confirmada' ? textoEntrega(e) : '';
+  const recebimento = aberto(e) ? textoRecebimento(e) : '';
+  const quem = [e.terceiroPessoa && `Retirou: ${e.terceiroPessoa}`, e.autorizacaoNumero].filter(Boolean).join(' · ');
   return (
     <article className="bm-painel tm-registro" aria-label={e.numero}>
       <div className="tm-registro__cabeca">
@@ -50,11 +56,31 @@ function Registro({ e, aoDevolver, aoReceber }: { e: Emprestimo; aoDevolver?: ()
         <small>{dataHora(e.criadoEm)}</small>
       </div>
       {!rm && meta && <p className="tm-registro__meta">{meta}</p>}
+      {quem && <p className="tm-registro__meta">{quem}</p>}
       {!rm && aberto(e) && <LinhaPrazo e={e} />}
       {!rm && entrega && (
         <p className="tm-prazo tm-prazo--info">
           <Icone nome="info" tamanho={20} /> {entrega}
         </p>
+      )}
+      {recebimento && (
+        <p className="tm-prazo tm-prazo--aviso">
+          <Icone nome="alerta" tamanho={20} /> {recebimento}
+        </p>
+      )}
+      {!!e.divergencias?.length && (
+        <ul className="tm-registro__lista" aria-label="Divergências">
+          {e.divergencias.map((d) => (
+            <li key={d.id}>
+              <span>
+                <b>{textoTipoDivergencia(d.tipo)}</b> {d.descricao}
+              </span>
+              <small>
+                {d.etapa === 'devolucao' ? 'Devolução' : 'Retirada'} · {d.status === 'aberta' ? 'Aberta' : 'Resolvida'}
+              </small>
+            </li>
+          ))}
+        </ul>
       )}
       {rm && e.status === 'aguardando_baixa' && (
         <p className="tm-prazo tm-prazo--info">
@@ -146,7 +172,7 @@ export function TelaMeus() {
       aoDevolver={
         aberto(e) && devolviveis(e).length
           ? () => {
-              setDev({ id: e.id, sel: {}, de: 'meus' });
+              setDev({ id: e.id, sel: {}, de: 'meus', fotos: [] });
               ir('devolver-itens');
             }
           : undefined

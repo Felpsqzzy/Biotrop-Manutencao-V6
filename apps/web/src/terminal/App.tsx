@@ -2,8 +2,10 @@
 import type { ReactNode } from 'react';
 import { m } from 'motion/react';
 import { MOVIMENTO } from '../ui';
+import { TelaAutorizacoes } from './Autorizacao';
 import { Bandeja, TelaCatalogo } from './Catalogo';
-import { TelaDevolver, TelaDevolverItens, TelaDevolverOk, TelaDevolverRevisao } from './Devolver';
+import { TelaConferencia, TelaDevolver, TelaDevolverItens, TelaDevolverOk, TelaDevolverRevisao } from './Devolver';
+import { TelaEntrega } from './Entrega';
 import { Fundo, TelaEntrada, TelaPrimeiro } from './Entrada';
 import { TerminalProvider, useTerminal, type Tela } from './estado';
 import { TelaMeus } from './Meus';
@@ -28,6 +30,9 @@ const TELAS: Record<Tela, () => ReactNode> = {
   'devolver-ok': () => <TelaDevolverOk />,
   receber: () => <TelaReceber />,
   meus: () => <TelaMeus />,
+  entrega: () => <TelaEntrega />,
+  autorizacoes: () => <TelaAutorizacoes />,
+  conferencia: () => <TelaConferencia />,
 };
 
 function Casca() {

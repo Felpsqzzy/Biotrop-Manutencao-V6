@@ -1,33 +1,71 @@
 /**
- * Dupla confirmação (migration 49): o almoxarife entregou no balcão (empréstimo registrado pelo painel) e o colaborador
- * confirma aqui que recebeu, com o termo de responsabilidade (POST /emprestimos/:id/recebimento, termoAceito: true).
- * Um cartão por empréstimo com entrega 'aguardando_colaborador'; o termo é marcado em cada um. Repetir não duplica
- * (o servidor devolve "repetido"); 409 (já não pede confirmação) relê a lista.
+ * Dupla confirmação (migrations 49 e 50): o almoxarife entregou no balcão (empréstimo registrado pelo painel) e o
+ * colaborador declara aqui "Recebi, conferi a quantidade e estão em boas condições" com o termo (POST
+ * /emprestimos/:id/recebimento {termoAceito, conferido}) ou registra a divergência com foto ({divergencias}). Com
+ * divergência aberta da retirada, o "recebi" fica travado até o almoxarifado resolver. Repetir não duplica (o servidor
+ * devolve "repetido"); 409 (já não pede confirmação) relê a lista.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Badge, Botao, EmptyState, Icone, useToast } from '../ui';
-import { erroDe } from './api';
-import { Aceite, CabecalhoTela, Carregando } from './comum';
-import { useTerminal } from './estado';
-import { dataHora, estadoItem, pedeRecebimento, textoFinalidade } from './regras';
+import { erroDe, lista } from './api';
+import { CabecalhoTela, Carregando } from './comum';
+import { faltaRecebimento, Recebimento } from './Entrega';
+import { RECEBIMENTO_VAZIO, useTerminal, type EscolhaRecebimento } from './estado';
+import { Fotos } from './Fotos';
+import {
+  dataHora,
+  divergenciasAbertas,
+  estadoItem,
+  pedeRecebimento,
+  textoFinalidade,
+  textoRecebimento,
+  textoTipoDivergencia,
+} from './regras';
 import { MensagemErro } from './teclado';
-import type { Emprestimo } from './tipos';
+import type { Emprestimo, FotoEnviada, FotoRegistro } from './tipos';
 
 function CartaoRecebimento({ e, termo }: { e: Emprestimo; termo: string }) {
   const { chamar, carregarAbertos, setOcupado } = useTerminal();
   const toast = useToast();
-  const [aceito, setAceito] = useState(false);
+  const [escolha, setEscolha] = useState<EscolhaRecebimento>(RECEBIMENTO_VAZIO);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
+  const [fotos, setFotos] = useState<FotoEnviada[]>([]);
+  // null = ainda não sabe; o servidor pede foto no "recebi" quando a entrega ficou sem foto
+  const [semFotoEntrega, setSemFotoEntrega] = useState<boolean | null>(null);
   const fin = textoFinalidade(e.finalidade, e.finalidadeRef);
+  useEffect(() => {
+    let vivo = true;
+    void chamar('GET', `/emprestimos/${encodeURIComponent(e.id)}/fotos`).then((r) => {
+      if (!vivo || r.velho) return;
+      setSemFotoEntrega(!r.ok || !lista<FotoRegistro>(r.json.rows).some((f) => f.etapa === 'entrega'));
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [e.id, chamar]);
+  const abertas = divergenciasAbertas(e, 'retirada');
+  const bloqueio = abertas.length
+    ? 'Há divergência aberta neste empréstimo: o "recebi" fica liberado depois que o almoxarifado resolver.'
+    : '';
+  const falta =
+    faltaRecebimento(escolha, false) ||
+    (escolha.modo === 'ok' && bloqueio ? bloqueio : '') ||
+    (escolha.modo === 'ok' && semFotoEntrega !== false && !fotos.length
+      ? 'Tire pelo menos uma foto do que recebeu.'
+      : '');
 
   async function confirmar() {
     if (enviando) return;
-    if (!aceito) return setErro('Aceite o termo de responsabilidade para confirmar o recebimento.');
+    if (falta) return setErro(falta);
     setErro('');
     setEnviando(true);
     setOcupado(true);
-    const r = await chamar('POST', `/emprestimos/${encodeURIComponent(e.id)}/recebimento`, { termoAceito: true });
+    const corpo =
+      escolha.modo === 'divergencia'
+        ? { divergencias: escolha.divergencias }
+        : { termoAceito: true, conferido: true, ...(fotos.length ? { fotoIds: fotos.map((f) => f.fotoId) } : {}) };
+    const r = await chamar('POST', `/emprestimos/${encodeURIComponent(e.id)}/recebimento`, corpo);
     if (r.velho) return;
     setOcupado(false);
     setEnviando(false);
@@ -36,7 +74,15 @@ function CartaoRecebimento({ e, termo }: { e: Emprestimo; termo: string }) {
       if (r.status === 409 || r.status === 404) carregarAbertos();
       return;
     }
-    toast.mostrar({ texto: `Recebimento de ${e.numero} confirmado.`, tom: 'ok' });
+    toast.mostrar({
+      texto:
+        escolha.modo === 'divergencia'
+          ? `Divergência de ${e.numero} registrada.`
+          : `Recebimento de ${e.numero} confirmado.`,
+      tom: 'ok',
+    });
+    setEscolha(RECEBIMENTO_VAZIO);
+    setFotos([]);
     carregarAbertos();
   }
 
@@ -58,22 +104,62 @@ function CartaoRecebimento({ e, termo }: { e: Emprestimo; termo: string }) {
           </li>
         ))}
       </ul>
-      <Aceite
-        marcado={aceito}
-        aoMudar={(v) => {
+      {textoRecebimento(e) && (
+        <p className="tm-prazo tm-prazo--aviso">
+          <Icone nome="alerta" tamanho={20} /> {textoRecebimento(e)}
+        </p>
+      )}
+      {abertas.length > 0 && (
+        <ul className="tm-registro__lista" aria-label="Divergências abertas">
+          {abertas.map((d) => (
+            <li key={d.id}>
+              <span>
+                <b>{textoTipoDivergencia(d.tipo)}</b> {d.descricao}
+              </span>
+              <small>Aberta</small>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Recebimento
+        itens={(e.itensLista ?? []).map((i) => ({
+          id: i.id,
+          codigo: i.codigo,
+          descricao: i.descricao,
+          quantidade: i.quantidade,
+        }))}
+        valor={escolha}
+        aoMudar={(fn) => {
           setErro('');
-          setAceito(v);
+          setEscolha(fn);
         }}
+        termo={termo}
+        bloqueioOk={bloqueio}
         desligado={enviando}
-      >
-        <b>Termo de responsabilidade</b>
-        <small>{termo}</small>
-      </Aceite>
+      />
+      {escolha.modo !== 'divergencia' && !bloqueio && (
+        <div className="tm-campo-bloco">
+          <span className="tm-rotulo">
+            {semFotoEntrega === false ? 'Fotos do que recebeu (opcional)' : 'Fotos do que recebeu (obrigatória)'}
+          </span>
+          <Fotos
+            etapa="entrega"
+            rotulo={`Fotos do recebimento de ${e.numero}`}
+            fotos={fotos}
+            desligado={enviando}
+            aoAdicionar={(f) => {
+              setErro('');
+              setFotos((l) => [...l, f]);
+            }}
+            aoRemover={(id) => setFotos((l) => l.filter((f) => f.fotoId !== id))}
+          />
+        </div>
+      )}
       <MensagemErro texto={erro} />
       <Botao
         variante="acao"
         className="tm-botao-grande"
-        disabled={enviando || !aceito}
+        disabled={enviando || !!falta}
         aria-busy={enviando}
         onClick={() => void confirmar()}
       >
@@ -83,7 +169,8 @@ function CartaoRecebimento({ e, termo }: { e: Emprestimo; termo: string }) {
           </>
         ) : (
           <>
-            <Icone nome="check" tamanho={22} /> Confirmar recebimento
+            <Icone nome="check" tamanho={22} />{' '}
+            {escolha.modo === 'divergencia' ? 'Enviar divergência' : 'Confirmar recebimento'}
           </>
         )}
       </Botao>

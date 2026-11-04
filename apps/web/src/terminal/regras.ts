@@ -1,6 +1,15 @@
 // Regras puras do terminal (sem React): PIN, chave de operação, catálogo (categorias, CAMM e peças iguais), finalidade,
-// prazos e textos.
-import type { Emprestimo, Ferramenta, Finalidade, ItemEmprestimo, Separado } from './tipos';
+// prazos, autorização de terceiro, divergências e textos.
+import type {
+  Autorizacao,
+  Colaborador,
+  Emprestimo,
+  Ferramenta,
+  Finalidade,
+  ItemEmprestimo,
+  Separado,
+  TipoDivergencia,
+} from './tipos';
 
 export const PIN = 6;
 export const MAX_ITENS = 30;
@@ -25,6 +34,9 @@ export const FINALIDADES: { id: Finalidade; texto: string }[] = [
   { id: 'terceira', texto: 'Empresa terceira' },
   { id: 'outro', texto: 'Outra' },
 ];
+/** Conta interna no terminal: empresa terceira só pela conta da empresa, com autorização do líder (50). */
+export const FINALIDADES_INTERNO = FINALIDADES.filter((f) => f.id !== 'terceira');
+export const ehTerceiro = (c: Colaborador | null | undefined) => c?.tipo === 'terceiro';
 // as antigas só aparecem nos empréstimos já gravados
 const FINALIDADE_ANTIGA: Record<string, string> = { sm: 'SM', manutencao: 'Manutenção', consumo: 'Consumo' };
 export const pedeNumero = (f: string) => f === 'om' || f === 'tpm';
@@ -41,7 +53,16 @@ const ENTREGA: Record<string, string> = {
   aguardando_almoxarife: 'Aguardando o almoxarifado confirmar a entrega.',
   sem_almoxarife: 'Sem almoxarife no turno: o próximo almoxarife confirma a entrega.',
 };
-export const textoEntrega = (e: Emprestimo) => ENTREGA[texto(e.entrega)] ?? '';
+export function textoEntrega(e: Emprestimo): string {
+  if (e.entrega === 'confirmada') {
+    const quem = texto(e.entreguePor);
+    if (e.entregaVia === 'tablet') return `Entrega confirmada no tablet${quem ? ` por ${quem}` : ''}.`;
+    if (e.entregaVia === 'site_posterior')
+      return `Entrega confirmada depois pelo almoxarifado${quem ? ` (${quem})` : ''}.`;
+    return '';
+  }
+  return ENTREGA[texto(e.entrega)] ?? '';
+}
 export const pedeRecebimento = (e: Emprestimo) => e.entrega === 'aguardando_colaborador' && e.status !== 'estornado';
 // na retirada (RM) o mesmo status quer dizer outra coisa (encerrado = baixada; estornado = recusada)
 const STATUS_RM: Record<string, string> = {
@@ -113,6 +134,53 @@ export function novaChave(): string {
   crypto.getRandomValues(b);
   return `tm-${Date.now().toString(36)}-${Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')}`;
 }
+
+/* ---------------------------------------------------------------- fotos, divergências e autorização (50) */
+/** Fotos por etapa: entrega e devolução de 1 a 5; cada divergência, de 1 a 3. */
+export const MAX_FOTOS = 5;
+export const MAX_FOTOS_DIVERGENCIA = 3;
+export const TIPOS_DIVERGENCIA: { id: TipoDivergencia; texto: string }[] = [
+  { id: 'danificado', texto: 'Danificada' },
+  { id: 'quantidade_divergente', texto: 'Quantidade diferente' },
+  { id: 'incompleto', texto: 'Incompleta' },
+  { id: 'outra', texto: 'Outra' },
+];
+export const textoTipoDivergencia = (t: unknown) => TIPOS_DIVERGENCIA.find((x) => x.id === t)?.texto ?? texto(t);
+/** Divergências ainda abertas (etapa: só as da retirada ou da devolução). */
+export const divergenciasAbertas = (e: Emprestimo, etapa?: 'retirada' | 'devolucao') =>
+  (e.divergencias ?? []).filter((d) => d.status === 'aberta' && (!etapa || d.etapa === etapa));
+export function textoRecebimento(e: Emprestimo): string {
+  if (e.recebimentoSituacao === 'divergencia')
+    return divergenciasAbertas(e, 'retirada').length
+      ? 'Divergência no recebimento: aguardando o almoxarifado analisar.'
+      : 'Divergência resolvida: confirme o recebimento.';
+  return '';
+}
+
+const STATUS_AUT: Record<string, [string, 'ok' | 'info' | 'aviso' | 'neutro' | 'ruim']> = {
+  pendente: ['Aguardando o líder', 'aviso'],
+  aprovada: ['Aprovada', 'ok'],
+  recusada: ['Recusada', 'ruim'],
+  cancelada: ['Cancelada', 'neutro'],
+  expirada: ['Expirada', 'neutro'],
+  utilizada: ['Retirada feita', 'info'],
+};
+export const textoStatusAut = (a: Autorizacao) => STATUS_AUT[a.status]?.[0] ?? texto(a.status);
+export const tomStatusAut = (a: Autorizacao) => STATUS_AUT[a.status]?.[1] ?? 'neutro';
+/** Pendente ou aprovada e ainda dentro do turno (o servidor confere de novo: expira no fim do turno). */
+export const autorizacaoVigente = (a: Autorizacao, agora = Date.now()) =>
+  (a.status === 'pendente' || a.status === 'aprovada') && !(Date.parse(String(a.expiraEm ?? '')) <= agora);
+/** Bandeja travada no que o líder aprovou (o snapshot da autorização). */
+export const separadosDaAutorizacao = (a: Autorizacao): Separado[] =>
+  a.itens.map((i) => ({
+    ferramentaId: i.ferramentaId,
+    unidadeId: i.unidadeId ?? null,
+    identificador: '',
+    quantidade: Number(i.quantidade) || 0,
+    codigo: i.codigo,
+    nome: i.descricao,
+    maximo: Number(i.quantidade) || 0,
+  }));
 
 /* ---------------------------------------------------------------- catálogo */
 export const disponivel = (f: Ferramenta | undefined) => Number(f?.saldo?.disponivel) || 0;

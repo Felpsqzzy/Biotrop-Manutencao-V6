@@ -1,8 +1,10 @@
-// Terminal (tablet), só empréstimo (migration 49): login direto no empréstimo, cartões × lista, CAMM de cada ferramenta e
+// Terminal (tablet), só empréstimo (migration 49): login direto no empréstimo, cards × lista, CAMM de cada ferramenta e
 // filtro por CAMM, Separar/contador/bandeja, unidade pela etiqueta na folha, finalidade, prazo do fim do turno, termo de
 // responsabilidade, dupla confirmação (recebimento, sem almoxarife), chave de operação (reenvio usa a mesma) e a trava
-// de 700 ms no sucesso.
-// Roda contra o demo em memória (mesmo contrato da rota /api/terminal), sem atraso.
+// de 700 ms no sucesso. Migration 50: entrega com fotos, co-assinatura do almoxarife (e a recusada), recebimento
+// conferido ou com divergência (que trava o "recebi"), conta de terceiro com autorização do líder (aguardando,
+// aprovada, recusada, expirada), devolução com fotos obrigatórias e a sessão segurada na espera longa.
+// Roda contra o demo em memória (mesmo contrato da rota /api/terminal), sem atraso. Dados todos fictícios ([DEMO]).
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +12,7 @@ import { ToastProvider } from '../ui';
 import { chamar, definirTransporte, erroDe, type Transporte } from './api';
 import { Terminal } from './App';
 import { criarDemo, prazoTurno } from './demo';
+import { definirRedutor } from './Fotos';
 
 type Chamada = { metodo: string; url: string; corpo: unknown };
 
@@ -64,10 +67,10 @@ async function separar(busca: string, nome: string) {
   return item;
 }
 
-/** Na revisão: CAMM, finalidade (e número), termo. Espera o termo vir do servidor (/prazo). */
-async function preencherPedido(opc: { camm?: string; finalidade?: string; ref?: string; termo?: boolean } = {}) {
-  const { camm = 'CAMM 2', finalidade = 'Manutenção (OM)', ref = '40125', termo = true } = opc;
-  const termoCaixa = await screen.findByRole('checkbox', { name: /Termo de responsabilidade/ });
+/** Na revisão: CAMM, finalidade (e número). Espera o prazo vir do servidor (/prazo). */
+async function preencherPedido(opc: { camm?: string; finalidade?: string; ref?: string } = {}) {
+  const { camm = 'CAMM 2', finalidade = 'Manutenção (OM)', ref = '40125' } = opc;
+  await screen.findByText(/Devolver até/);
   if (camm)
     fireEvent.click(within(screen.getByRole('group', { name: 'Sua CAMM' })).getByRole('button', { name: camm }));
   if (finalidade)
@@ -75,7 +78,37 @@ async function preencherPedido(opc: { camm?: string; finalidade?: string; ref?: 
       within(screen.getByRole('group', { name: 'Finalidade' })).getByRole('button', { name: finalidade }),
     );
   if (ref) fireEvent.change(screen.getByLabelText(/^Número da/), { target: { value: ref } });
-  if (termo) fireEvent.click(termoCaixa);
+}
+
+/** Foto fictícia (o jsdom não desenha em canvas: a redução é trocada no beforeEach). */
+async function tirarFoto(etapa: string) {
+  const campos = screen.getAllByTestId(`foto-${etapa}`);
+  const campo = campos[campos.length - 1]!;
+  const grupo = campo.closest('.tm-fotos') as HTMLElement;
+  const antes = grupo.querySelectorAll('.tm-fotos__mini').length;
+  fireEvent.change(campo, { target: { files: [new File(['x'], 'foto.jpg', { type: 'image/jpeg' })] } });
+  await waitFor(() => expect(grupo.querySelectorAll('.tm-fotos__mini').length).toBe(antes + 1));
+}
+
+/** O almoxarife digita a matrícula e o PIN (no teclado da tela) na co-assinatura. */
+async function coassinar(matricula = '30205', pin = '519274') {
+  fireEvent.change(await screen.findByLabelText('Matrícula do almoxarife'), { target: { value: matricula } });
+  fireEvent.focus(screen.getByLabelText(/^PIN do almoxarife,/));
+  const teclado = screen.getByRole('group', { name: 'Teclado numérico do almoxarife' });
+  for (const d of pin) fireEvent.click(within(teclado).getByRole('button', { name: d }));
+}
+
+/** Da revisão até o envio: Continuar, foto, almoxarife (ou sem almoxarife), "recebi" + termo e Confirmar. */
+async function concluirEntrega(opc: { semAlmoxarife?: boolean; enviar?: boolean } = {}) {
+  fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+  await screen.findByRole('heading', { name: /Entrega das ferramentas|Retirada da/ });
+  await tirarFoto('entrega');
+  fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+  if (opc.semAlmoxarife) fireEvent.click(await screen.findByRole('button', { name: /Sem almoxarife no turno/ }));
+  else await coassinar();
+  fireEvent.click(await screen.findByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+  if (opc.enviar !== false) fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
 }
 
 const posts = (chamadas: Chamada[], url = '/api/terminal/emprestimos') =>
@@ -83,6 +116,12 @@ const posts = (chamadas: Chamada[], url = '/api/terminal/emprestimos') =>
 
 beforeEach(() => {
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
+  definirRedutor(async () => ({
+    imagem: 'data:image/jpeg;base64,/9j/AAAA',
+    miniatura: 'data:image/jpeg;base64,/9j/BBBB',
+    largura: 1600,
+    altura: 1200,
+  }));
   try {
     localStorage.clear();
   } catch {
@@ -92,6 +131,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   definirTransporte(null);
+  definirRedutor(null);
   vi.restoreAllMocks();
 });
 
@@ -107,10 +147,12 @@ describe('terminal', () => {
     expect(screen.getByRole('button', { name: /Sair/ })).toBeTruthy();
   });
 
-  it('alterna cartões ↔ lista, lembra a escolha e cada ferramenta mostra a CAMM onde fica', async () => {
+  it('alterna Cards ↔ Lista, lembra a escolha e cada ferramenta mostra a CAMM onde fica', async () => {
     montar();
     await entrar();
     fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
+    expect(screen.getByRole('button', { name: 'Cards' })).toBeTruthy();
+    expect(screen.queryByText('Cartões')).toBeNull();
     await buscar('trena');
     const item = await screen.findByRole('article', { name: 'Trena 5 m' });
     expect(item.classList.contains('tm-item--cards')).toBe(true);
@@ -165,7 +207,7 @@ describe('terminal', () => {
     expect(screen.getByRole('article', { name: 'Trena 5 m' })).toBeTruthy();
   });
 
-  it('Separar vira contador; a revisão mostra o prazo do fim do turno (do servidor) e pede o termo antes de confirmar', async () => {
+  it('Separar vira contador; a revisão mostra o prazo do fim do turno e a entrega pede "recebi" e termo antes de confirmar', async () => {
     const { chamadas } = montar();
     await entrar();
     fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
@@ -180,20 +222,26 @@ describe('terminal', () => {
     expect(screen.getByText('1 item separado')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await screen.findByText('Revisar o empréstimo');
-    const termo = await screen.findByRole('checkbox', { name: /Termo de responsabilidade/ });
-    expect(termo.closest('label')!.textContent).toContain('me responsabilizo por devolvê-las no prazo');
     expect(chamadas.some((c) => c.metodo === 'GET' && c.url === '/api/terminal/prazo')).toBe(true);
-    expect(screen.getByText(/Devolver até \d\d\/\d\d às \d\d:\d\d \(fim do turno\)/)).toBeTruthy();
-    // prazo só exibido: nenhum campo de prazo
+    await screen.findByText(/Devolver até \d\d\/\d\d às \d\d:\d\d \(fim do turno\)/);
+    // prazo só exibido: nenhum campo de prazo; o termo e o "sem almoxarife" saíram da revisão (vão para a entrega)
     expect(document.querySelector('input[type="date"], input[type="datetime-local"]')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    await preencherPedido();
+    await concluirEntrega({ enviar: false });
     const confirmar = screen.getByRole('button', { name: /Confirmar empréstimo/ }) as HTMLButtonElement;
+    expect(confirmar.disabled).toBe(false);
+    const termo = screen.getByRole('checkbox', { name: /Termo de responsabilidade/ });
+    expect(termo.closest('label')!.textContent).toContain('me responsabilizo por devolvê-las no prazo');
+    fireEvent.click(termo);
     expect(confirmar.disabled).toBe(true);
     fireEvent.click(termo);
-    expect(confirmar.disabled).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
+    expect(confirmar.disabled).toBe(true);
   });
 
-  it('pedido: CAMM, finalidade e número obrigatórios na tela; CAPEX vai sem número; o corpo leva o termo aceito', async () => {
+  it('pedido: CAMM, finalidade e número obrigatórios; CAPEX sem número; o corpo leva termo, fotos, almoxarife e "recebi"', async () => {
     const { chamadas } = montar();
     await entrar();
     fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
@@ -203,9 +251,9 @@ describe('terminal', () => {
       within(await screen.findByRole('group', { name: 'Finalidade' }))
         .getAllByRole('button')
         .map((b) => b.textContent),
-    ).toEqual(['Manutenção (OM)', 'CAPEX', 'TPM', 'Empresa terceira', 'Outra']);
+    ).toEqual(['Manutenção (OM)', 'CAPEX', 'TPM', 'Outra']);
     await preencherPedido({ camm: '', finalidade: '', ref: '' });
-    const confirmar = screen.getByRole('button', { name: /Confirmar empréstimo/ });
+    const confirmar = screen.getByRole('button', { name: /^Continuar/ });
     fireEvent.click(confirmar);
     expect(screen.getByRole('alert').textContent).toBe('Escolha a sua CAMM.');
     fireEvent.click(within(screen.getByRole('group', { name: 'Sua CAMM' })).getByRole('button', { name: 'C. LOG' }));
@@ -215,21 +263,29 @@ describe('terminal', () => {
     fireEvent.click(confirmar);
     expect(screen.getByRole('alert').textContent).toBe('Informe o número da TPM.');
     expect(posts(chamadas)).toHaveLength(0);
-    // terceira e outra: campo opcional; CAPEX: sem campo
-    fireEvent.click(
-      within(screen.getByRole('group', { name: 'Finalidade' })).getByRole('button', { name: 'Empresa terceira' }),
-    );
-    expect(screen.getByLabelText('Qual empresa? (opcional)')).toBeTruthy();
+    // outra: campo opcional; CAPEX: sem campo
+    fireEvent.click(within(screen.getByRole('group', { name: 'Finalidade' })).getByRole('button', { name: 'Outra' }));
+    expect(screen.getByLabelText('Qual? (opcional)')).toBeTruthy();
     fireEvent.click(within(screen.getByRole('group', { name: 'Finalidade' })).getByRole('button', { name: 'CAPEX' }));
     expect(screen.queryByRole('textbox')).toBeNull();
-    fireEvent.click(confirmar);
+    await concluirEntrega();
     await screen.findByText('Empréstimo registrado');
     const corpo = posts(chamadas)[0]!.corpo as Record<string, unknown>;
-    expect(corpo).toMatchObject({ finalidade: 'capex', finalidadeRef: '', camm: 'C. LOG', termoAceito: true });
+    expect(corpo).toMatchObject({
+      finalidade: 'capex',
+      finalidadeRef: '',
+      camm: 'C. LOG',
+      termoAceito: true,
+      recebimento: { conferido: true },
+    });
+    expect(corpo.fotosEntrega).toHaveLength(1);
+    expect(typeof corpo.coassinaturaId).toBe('string');
     expect(corpo).not.toHaveProperty('modalidade');
     expect(corpo).not.toHaveProperty('semAlmoxarife');
+    expect(corpo).not.toHaveProperty('autorizacaoId');
     expect(corpo).not.toHaveProperty('prazo');
     expect(screen.getByText(/Devolva até .* \(fim do turno\)/)).toBeTruthy();
+    expect(screen.getByText('Entrega confirmada por [DEMO] Bruno Teles.')).toBeTruthy();
   });
 
   it('erro do servidor no empréstimo: a mensagem dele aparece como veio', async () => {
@@ -244,10 +300,10 @@ describe('terminal', () => {
     await separar('trena', 'Trena 5 m');
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await preencherPedido({ ref: '  7  ' });
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega();
     await screen.findByText('Informe o número da OM.');
     expect((posts(chamadas)[0]!.corpo as { finalidadeRef: string }).finalidadeRef).toBe('7');
-    expect(screen.getByText('Revisar o empréstimo')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Entrega das ferramentas' })).toBeTruthy();
   });
 
   it('item por unidade: Separar abre a folha e a unidade escolhida pela etiqueta vai no pedido', async () => {
@@ -273,16 +329,18 @@ describe('terminal', () => {
     await screen.findByText('Revisar o empréstimo');
     expect(screen.getByText('PAT-D1002')).toBeTruthy();
     await preencherPedido();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Sem almoxarife no turno/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega({ semAlmoxarife: true });
     await screen.findByText('Empréstimo registrado');
+    expect(screen.getByText(/Sem almoxarife no turno: o próximo almoxarife confirma/)).toBeTruthy();
     const corpo = posts(chamadas)[0]!.corpo as {
       itens: { unidadeId?: string; quantidade: number }[];
       finalidade: string;
       finalidadeRef: string;
       camm: string;
       semAlmoxarife?: boolean;
+      coassinaturaId?: string;
     };
+    expect(corpo.coassinaturaId).toBeUndefined();
     expect(corpo.itens).toHaveLength(1);
     expect(corpo.itens[0]!.unidadeId).toBeTruthy();
     expect(corpo.itens[0]!.quantidade).toBe(1);
@@ -301,7 +359,7 @@ describe('terminal', () => {
     await separar('trena', 'Trena 5 m');
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await preencherPedido();
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega();
     await screen.findByText(/Sem conexão com o servidor/);
     fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
     await screen.findByText('Empréstimo registrado');
@@ -318,7 +376,7 @@ describe('terminal', () => {
     await separar('alicate universal', 'Alicate universal 8"');
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await preencherPedido();
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega();
     await screen.findByText('Empréstimo registrado');
     const todos = posts(chamadas);
     expect(todos).toHaveLength(3);
@@ -332,7 +390,7 @@ describe('terminal', () => {
     await separar('trena', 'Trena 5 m');
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await preencherPedido();
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega();
     await screen.findByText('Empréstimo registrado');
     const sairBtn = screen.getByRole('button', { name: /Terminar e sair/ });
     const agora = Date.now();
@@ -346,7 +404,7 @@ describe('terminal', () => {
     await screen.findByText('Acesso do colaborador');
   });
 
-  it('dupla confirmação: empréstimo entregue no balcão pede "Confirmar recebimento" com o termo', async () => {
+  it('dupla confirmação: empréstimo entregue no balcão pede "recebi, conferi" e o termo', async () => {
     const { chamadas } = montar();
     await entrar();
     const faixa = await screen.findByText(/entregou no balcão 1 empréstimo seu/);
@@ -360,11 +418,19 @@ describe('terminal', () => {
     const botao = within(cartao).getByRole('button', { name: /Confirmar recebimento/ }) as HTMLButtonElement;
     expect(botao.disabled).toBe(true);
     fireEvent.click(within(cartao).getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    expect(botao.disabled).toBe(true);
+    fireEvent.click(within(cartao).getByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
+    // a entrega do balcão ficou sem foto: o "recebi" pede uma
+    await within(cartao).findByText('Fotos do que recebeu (obrigatória)');
+    expect(botao.disabled).toBe(true);
+    await tirarFoto('entrega');
+    expect(botao.disabled).toBe(false);
     fireEvent.click(botao);
     await screen.findByText('Nada para confirmar');
     const rec = chamadas.filter((c) => c.metodo === 'POST' && c.url.endsWith('/recebimento'));
     expect(rec).toHaveLength(1);
-    expect(rec[0]!.corpo).toEqual({ termoAceito: true });
+    expect(rec[0]!.corpo).toMatchObject({ termoAceito: true, conferido: true });
+    expect((rec[0]!.corpo as { fotoIds: string[] }).fotoIds).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: /Voltar ao início/ }));
     await screen.findByRole('heading', { name: 'Empréstimo de ferramentas' });
     expect(screen.queryByText(/entregou no balcão/)).toBeNull();
@@ -383,7 +449,9 @@ describe('terminal', () => {
     await entrar();
     fireEvent.click(await screen.findByRole('button', { name: /Confirmar recebimento/ }));
     const cartao = await screen.findByRole('article');
+    fireEvent.click(within(cartao).getByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
     fireEvent.click(within(cartao).getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    await tirarFoto('entrega');
     fireEvent.click(within(cartao).getByRole('button', { name: /Confirmar recebimento/ }));
     await screen.findByText('Este empréstimo não pede confirmação de recebimento.');
   });
@@ -413,7 +481,7 @@ describe('terminal', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Liberar o tablet' })).toBeNull());
   });
 
-  it('durante o envio, "Separar mais" e Voltar ficam parados', async () => {
+  it('durante o envio da entrega, Voltar fica parado', async () => {
     let soltar: () => void = () => {};
     const segura = new Promise<void>((r) => (soltar = r));
     let demoRef: ReturnType<typeof criarDemo> | null = null;
@@ -429,13 +497,12 @@ describe('terminal', () => {
     await separar('trena', 'Trena 5 m');
     fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
     await preencherPedido();
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await concluirEntrega();
     await screen.findByText(/Registrando/);
     const voltar = screen.getByRole('button', { name: /Voltar/ }) as HTMLButtonElement;
-    expect((screen.getByRole('button', { name: /Separar mais/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(voltar.disabled).toBe(true);
     fireEvent.click(voltar);
-    expect(screen.getByText('Revisar o empréstimo')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Entrega das ferramentas' })).toBeTruthy();
     await act(async () => soltar());
     await screen.findByText('Empréstimo registrado');
   });
@@ -457,6 +524,7 @@ describe('terminal', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Marcar todos/ }));
     fireEvent.click(screen.getByRole('button', { name: /Revisar devolução/ }));
     fireEvent.click(await screen.findByRole('checkbox', { name: /Sem almoxarife no turno/ }));
+    await tirarFoto('devolucao');
     fireEvent.click(screen.getByRole('button', { name: /Confirmar devolução/ }));
     await screen.findByText(/Registrando/);
     const voltar = screen.getByRole('button', { name: /Voltar/ }) as HTMLButtonElement;
@@ -467,6 +535,8 @@ describe('terminal', () => {
     await screen.findByText('Devolução registrada');
     const dev = chamadas.find((c) => c.metodo === 'POST' && c.url.endsWith('/devolucoes'));
     expect((dev!.corpo as { semAlmoxarife?: boolean }).semAlmoxarife).toBe(true);
+    // sem almoxarife: nada de conferir agora
+    expect(screen.queryByRole('button', { name: /Conferir agora/ })).toBeNull();
   });
 
   it('devolução: se a busca dos abertos falha, mostra o erro com "Tentar de novo" (não fica carregando)', async () => {
@@ -550,6 +620,386 @@ describe('terminal', () => {
   });
 });
 
+describe('terminal (migration 50): fotos, almoxarife, divergência e terceiros', () => {
+  async function ateAlmoxarife() {
+    fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
+    await separar('trena', 'Trena 5 m');
+    fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
+    await preencherPedido();
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    await tirarFoto('entrega');
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    await screen.findByLabelText('Matrícula do almoxarife');
+  }
+
+  it('fotos da entrega: sem foto não passa; uma por envio (POST /fotos) e dá para remover', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
+    await separar('trena', 'Trena 5 m');
+    fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
+    await preencherPedido();
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    await screen.findByRole('heading', { name: 'Entrega das ferramentas' });
+    const campo = screen.getByTestId('foto-entrega');
+    expect(campo.getAttribute('capture')).toBe('environment');
+    expect(campo.getAttribute('accept')).toBe('image/*');
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    expect(screen.getByText('Tire pelo menos uma foto das ferramentas.')).toBeTruthy();
+    await tirarFoto('entrega');
+    await tirarFoto('entrega');
+    const fotos = chamadas.filter((c) => c.metodo === 'POST' && c.url === '/api/terminal/fotos');
+    expect(fotos).toHaveLength(2);
+    expect(fotos[0]!.corpo).toMatchObject({ etapa: 'entrega', largura: 1600, altura: 1200 });
+    fireEvent.click(screen.getByRole('button', { name: 'Remover foto 2' }));
+    expect(document.querySelectorAll('.tm-fotos__mini')).toHaveLength(1);
+  });
+
+  it('co-assinatura recusada: PIN errado mostra o erro sem encerrar a sessão; o tomador não co-assina; o certo segue', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    await ateAlmoxarife();
+    // PIN no campo mascarado, digitado no teclado da tela
+    const pin = screen.getByLabelText(/^PIN do almoxarife,/) as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.getAttribute('inputmode')).toBe('none');
+    await coassinar('30205', '111222');
+    await screen.findByText('Matrícula ou PIN inválidos.');
+    expect(pin.value).toBe('');
+    expect(screen.getByRole('heading', { name: 'Entrega das ferramentas' })).toBeTruthy();
+    // a sessão de quem retira foi conferida e continua
+    await waitFor(() => expect(chamadas.some((c) => c.url === '/api/terminal/eu')).toBe(true));
+    expect(screen.queryByText('Acesso do colaborador')).toBeNull();
+    // técnico (perfil fora) também é recusado pelo servidor
+    await coassinar('10433', '613947');
+    await screen.findByText('Matrícula ou PIN inválidos.');
+    // o próprio tomador: a tela barra antes de enviar
+    const antes = chamadas.filter((c) => c.url === '/api/terminal/coassinatura').length;
+    await coassinar('10421', '480256');
+    await screen.findByText(/Quem retira não pode confirmar a própria entrega/);
+    expect(chamadas.filter((c) => c.url === '/api/terminal/coassinatura')).toHaveLength(antes);
+    await coassinar();
+    await screen.findByRole('checkbox', { name: /Recebi, conferi a quantidade/ });
+    expect(screen.getByText('Entrega confirmada por [DEMO] Bruno Teles.')).toBeTruthy();
+    const ultima = chamadas.filter((c) => c.url === '/api/terminal/coassinatura').at(-1)!;
+    expect(ultima.corpo).toEqual({ matricula: '30205', senha: '519274', finalidade: 'entrega' });
+  });
+
+  it('espera do almoxarife: passado o tempo de inatividade, a sessão é renovada em vez de encerrar', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    await ateAlmoxarife();
+    const pings = () => chamadas.filter((c) => c.metodo === 'GET' && c.url === '/api/terminal/eu').length;
+    const antes = pings();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 150_000);
+    await waitFor(() => expect(pings()).toBeGreaterThan(antes), { timeout: 2000 });
+    expect(screen.queryByText('Acesso do colaborador')).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Ainda está aí?' })).toBeNull();
+    expect(screen.getByLabelText('Matrícula do almoxarife')).toBeTruthy();
+  });
+
+  it('divergência na entrega: vai no lugar do "recebi" (com foto) e o empréstimo fica com o recebimento pendente', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    await ateAlmoxarife();
+    await coassinar();
+    fireEvent.click(await screen.findByRole('button', { name: /Registrar divergência/ }));
+    const form = screen.getByRole('group', { name: 'Nova divergência' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Adicionar divergência' }));
+    expect(within(form).getByText('Escolha o tipo da divergência.')).toBeTruthy();
+    fireEvent.click(within(form).getByRole('button', { name: 'Danificada' }));
+    fireEvent.change(within(form).getByLabelText('O que está diferente?'), {
+      target: { value: 'Trena com a fita torta' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Adicionar divergência' }));
+    expect(within(form).getByText('Tire pelo menos uma foto da divergência.')).toBeTruthy();
+    await tirarFoto('divergencia');
+    fireEvent.click(within(form).getByRole('button', { name: 'Adicionar divergência' }));
+    // com divergência, o "recebi" fica desligado
+    const recebi = screen.getByRole('checkbox', { name: /Recebi, conferi a quantidade/ }) as HTMLInputElement;
+    expect(recebi.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await screen.findByText('Empréstimo registrado');
+    expect(screen.getByText(/Divergência registrada/)).toBeTruthy();
+    const corpo = posts(chamadas)[0]!.corpo as { recebimento: { divergencias: Record<string, unknown>[] } };
+    expect(corpo.recebimento.divergencias).toHaveLength(1);
+    expect(corpo.recebimento.divergencias[0]).toMatchObject({
+      tipo: 'danificado',
+      descricao: 'Trena com a fita torta',
+    });
+    expect(corpo.recebimento.divergencias[0]!.fotoIds).toHaveLength(1);
+  });
+
+  it('abrir "Registrar divergência" desmarca e trava o "recebi" e desliga Confirmar', async () => {
+    montar();
+    await entrar();
+    await ateAlmoxarife();
+    await coassinar();
+    const recebi = (await screen.findByRole('checkbox', { name: /Recebi, conferi a quantidade/ })) as HTMLInputElement;
+    fireEvent.click(recebi);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    const confirmar = screen.getByRole('button', { name: /Confirmar empréstimo/ }) as HTMLButtonElement;
+    expect(confirmar.disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Registrar divergência/ }));
+    expect([recebi.checked, recebi.disabled, confirmar.disabled]).toEqual([false, true, true]);
+    // cancelar sem divergência solta o "recebi" de novo (desmarcado)
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Nova divergência' })).getByRole('button', { name: 'Cancelar' }),
+    );
+    expect([recebi.checked, recebi.disabled]).toEqual([false, false]);
+  });
+
+  it('teto de 5 fotos vale também no envio (eventos seguidos não passam do limite)', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
+    await separar('trena', 'Trena 5 m');
+    fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
+    await preencherPedido();
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    await screen.findByRole('heading', { name: 'Entrega das ferramentas' });
+    const campo = screen.getByTestId('foto-entrega');
+    const arquivo = () => ({ target: { files: [new File(['x'], 'f.jpg', { type: 'image/jpeg' })] } });
+    for (let i = 0; i < 7; i++) fireEvent.change(campo, arquivo());
+    await waitFor(() => expect(document.querySelectorAll('.tm-fotos__mini')).toHaveLength(5));
+    await act(async () => {});
+    expect(chamadas.filter((c) => c.metodo === 'POST' && c.url === '/api/terminal/fotos')).toHaveLength(5);
+    expect(screen.getAllByText('Limite de 5 fotos.').length).toBeGreaterThan(0);
+  });
+
+  it('demo: divergência com quantidade 0 ou negativa é recusada (como a API)', async () => {
+    const demo = criarDemo({ atraso: 0 });
+    await demo.handle('POST', '/api/terminal/entrar', { matricula: '10421', senha: '480256' });
+    const abertos = (await demo.handle('GET', '/api/terminal/emprestimos?situacao=abertos')).json as unknown as {
+      rows: { id: string; entrega: string }[];
+    };
+    const balcao = abertos.rows.find((e) => e.entrega === 'aguardando_colaborador')!;
+    const foto = (
+      await demo.handle('POST', '/api/terminal/fotos', {
+        etapa: 'divergencia',
+        imagem: 'data:image/jpeg;base64,/9j/AAAA',
+        miniatura: 'data:image/jpeg;base64,/9j/BBBB',
+      })
+    ).json as unknown as { fotoId: string };
+    for (const quantidade of [0, -1]) {
+      const r = await demo.handle('POST', `/api/terminal/emprestimos/${balcao.id}/recebimento`, {
+        divergencias: [
+          { tipo: 'quantidade_divergente', descricao: 'Faltou uma peça', quantidade, fotoIds: [foto.fotoId] },
+        ],
+      });
+      expect([r.status, (r.json as { erro?: string }).erro]).toEqual([
+        400,
+        'Informe quantas peças têm problema ou faltam.',
+      ]);
+    }
+    // "recebi" sem foto, com a entrega sem foto: recusado
+    const semFoto = await demo.handle('POST', `/api/terminal/emprestimos/${balcao.id}/recebimento`, {
+      termoAceito: true,
+      conferido: true,
+    });
+    expect([semFoto.status, (semFoto.json as { erro?: string }).erro]).toEqual([
+      400,
+      'Tire pelo menos uma foto do que recebeu.',
+    ]);
+  });
+
+  it('divergência aberta bloqueia o "recebi" até o almoxarifado resolver', async () => {
+    const { chamadas, demo } = montar();
+    await entrar();
+    fireEvent.click(await screen.findByRole('button', { name: /Confirmar recebimento/ }));
+    let cartao = await screen.findByRole('article');
+    fireEvent.click(within(cartao).getByRole('button', { name: /Registrar divergência/ }));
+    fireEvent.click(within(cartao).getByRole('button', { name: 'Quantidade diferente' }));
+    fireEvent.change(within(cartao).getByLabelText('O que está diferente?'), {
+      target: { value: 'Veio só um alicate' },
+    });
+    const qtd = within(cartao).getByLabelText('Quantas peças têm problema ou faltam?');
+    fireEvent.change(qtd, { target: { value: '0' } });
+    await tirarFoto('divergencia');
+    fireEvent.click(within(cartao).getByRole('button', { name: 'Adicionar divergência' }));
+    expect(within(cartao).getByText('Informe quantas peças têm problema ou faltam.')).toBeTruthy();
+    fireEvent.change(qtd, { target: { value: '2' } });
+    fireEvent.click(within(cartao).getByRole('button', { name: 'Adicionar divergência' }));
+    fireEvent.click(within(cartao).getByRole('button', { name: /Enviar divergência/ }));
+    // continua pedindo o recebimento, agora travado
+    await waitFor(() => expect(screen.getByRole('article').textContent).toContain('Veio só um alicate'));
+    cartao = screen.getByRole('article');
+    expect(within(cartao).queryByRole('checkbox', { name: /Recebi, conferi a quantidade/ })).toBeNull();
+    expect(cartao.textContent).toContain('o "recebi" fica liberado depois que o almoxarifado resolver');
+    const rec = chamadas.filter((c) => c.metodo === 'POST' && c.url.endsWith('/recebimento'));
+    expect(rec).toHaveLength(1);
+    expect(rec[0]!.corpo).toMatchObject({ divergencias: [{ tipo: 'quantidade_divergente', quantidade: 2 }] });
+    // Meus empréstimos mostra a divergência aberta
+    fireEvent.click(screen.getByRole('button', { name: /Voltar/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Meus empréstimos/ }));
+    const reg = (await screen.findAllByRole('article')).find((a) => a.textContent!.includes('Veio só um alicate'))!;
+    expect(reg.textContent).toContain('Retirada · Aberta');
+    // o almoxarifado resolve no site: o "recebi" volta
+    demo.resolverDivergencias(reg.getAttribute('aria-label')!);
+    fireEvent.click(screen.getByRole('button', { name: /Voltar/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirmar recebimento/ }));
+    cartao = await screen.findByRole('article');
+    await waitFor(() => expect(cartao.textContent).toContain('Divergência resolvida'));
+    fireEvent.click(within(cartao).getByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
+    fireEvent.click(within(cartao).getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    await tirarFoto('entrega');
+    fireEvent.click(within(cartao).getByRole('button', { name: /Confirmar recebimento/ }));
+    await screen.findByText('Nada para confirmar');
+  });
+
+  it('devolução sem foto fica bloqueada; com foto, vai com fotoIds e oferece conferir com o almoxarife', async () => {
+    const { chamadas } = montar();
+    await entrar();
+    fireEvent.click(screen.getByRole('button', { name: /^Devolver/ }));
+    fireEvent.click((await screen.findAllByRole('button', { name: /Devolver deste/ }))[0]!);
+    fireEvent.click(await screen.findByRole('button', { name: /Marcar todos/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Revisar devolução/ }));
+    const confirmar = (await screen.findByRole('button', { name: /Confirmar devolução/ })) as HTMLButtonElement;
+    expect(confirmar.disabled).toBe(true);
+    fireEvent.click(confirmar);
+    expect(chamadas.some((c) => c.url.endsWith('/devolucoes'))).toBe(false);
+    await tirarFoto('devolucao');
+    expect(confirmar.disabled).toBe(false);
+    fireEvent.click(confirmar);
+    await screen.findByText('Devolução registrada');
+    const dev = chamadas.find((c) => c.metodo === 'POST' && c.url.endsWith('/devolucoes'))!;
+    expect((dev.corpo as { fotoIds: string[] }).fotoIds).toHaveLength(1);
+    // conferência no ato: co-assinatura (finalidade conferência) e o resultado de cada item
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000);
+    fireEvent.click(screen.getByRole('button', { name: /Conferir agora com o almoxarife/ }));
+    vi.restoreAllMocks();
+    await coassinar();
+    fireEvent.click(await screen.findByRole('button', { name: /Registrar conferência/ }));
+    await screen.findByRole('heading', { name: 'Empréstimo de ferramentas' });
+    const conf = chamadas.find((c) => c.url.endsWith('/conferencia-no-ato'))!;
+    expect(conf.corpo).toMatchObject({
+      itens: expect.arrayContaining([expect.objectContaining({ resultado: 'boa' })]),
+    });
+    expect(chamadas.filter((c) => c.url === '/api/terminal/coassinatura').at(-1)!.corpo).toMatchObject({
+      finalidade: 'conferencia',
+    });
+  });
+
+  it('terceiro: pede autorização (aguardando), o líder aprova no site e a retirada vai travada na autorização', async () => {
+    const { chamadas, demo } = montar();
+    await entrar('T9001', '362918');
+    expect(screen.getByRole('button', { name: /Minhas autorizações/ })).toBeTruthy();
+    await screen.findByText(/1 autorização aprovada/);
+    fireEvent.click(screen.getByRole('button', { name: /Pegar ferramentas/ }));
+    await separar('alicate universal', 'Alicate universal 8"');
+    fireEvent.click(screen.getByRole('button', { name: /Revisar/ }));
+    await screen.findByRole('heading', { name: 'Pedir autorização' });
+    // empresa fixa da conta; sem escolha de finalidade
+    expect(screen.getByText('[DEMO] Montagens Fictícias Ltda', { selector: 'b' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Finalidade' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Enviar para autorização/ }));
+    expect(screen.getByRole('alert').textContent).toBe('Informe o nome de quem vai retirar.');
+    fireEvent.change(screen.getByLabelText('Nome de quem vai retirar'), { target: { value: '[DEMO] João Prestador' } });
+    const lider = screen.getByLabelText('Líder que autoriza') as HTMLSelectElement;
+    await waitFor(() => expect(lider.disabled).toBe(false));
+    fireEvent.change(lider, { target: { value: 'p7' } });
+    fireEvent.click(within(screen.getByRole('group', { name: 'Sua CAMM' })).getByRole('button', { name: 'CAMM 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /Enviar para autorização/ }));
+    await screen.findByRole('heading', { name: 'Minhas autorizações' });
+    const nova = await screen.findByRole('article', { name: 'AUT-D00003' });
+    expect(nova.textContent).toContain('Aguardando o líder');
+    expect(nova.textContent).toContain('Retira: [DEMO] João Prestador');
+    expect(within(nova).queryByRole('button', { name: /Retirar agora/ })).toBeNull();
+    const pedido = chamadas.find((c) => c.metodo === 'POST' && c.url === '/api/terminal/autorizacoes')!;
+    expect(pedido.corpo).toMatchObject({ liderId: 'p7', terceiroPessoa: '[DEMO] João Prestador', camm: 'CAMM 1' });
+    expect(posts(chamadas)).toHaveLength(0);
+
+    // o líder aprova no site; a tela relê
+    demo.decidir('AUT-D00003', 'aprovar');
+    fireEvent.click(screen.getByRole('button', { name: /Atualizar/ }));
+    await waitFor(() => expect(screen.getByRole('article', { name: 'AUT-D00003' }).textContent).toContain('Aprovada'));
+    fireEvent.click(
+      within(screen.getByRole('article', { name: 'AUT-D00003' })).getByRole('button', { name: /Retirar agora/ }),
+    );
+    await screen.findByRole('heading', { name: 'Retirada da AUT-D00003' });
+    await tirarFoto('entrega');
+    fireEvent.click(screen.getByRole('button', { name: /^Continuar/ }));
+    await coassinar();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Recebi, conferi a quantidade/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Termo de responsabilidade/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar empréstimo/ }));
+    await screen.findByText('Empréstimo registrado');
+    const corpo = posts(chamadas)[0]!.corpo as Record<string, unknown>;
+    expect(corpo).toMatchObject({ finalidade: 'terceira', camm: 'CAMM 1' });
+    expect(typeof corpo.autorizacaoId).toBe('string');
+    expect((corpo.itens as unknown[]).length).toBe(1);
+    // utilizada: não aparece mais para retirar
+    fireEvent.click(screen.getByRole('button', { name: /Fazer outro empréstimo/ }));
+  });
+
+  it('terceiro: recusada mostra a justificativa do líder; expirada no fim do turno não deixa retirar', async () => {
+    const { demo } = montar();
+    await entrar('T9001', '362918');
+    fireEvent.click(screen.getByRole('button', { name: /Minhas autorizações/ }));
+    const recusada = await screen.findByRole('article', { name: 'AUT-D00002' });
+    expect(recusada.textContent).toContain('Recusada pelo líder: Serviço não programado para hoje.');
+    expect(within(recusada).queryByRole('button', { name: /Retirar agora/ })).toBeNull();
+    const aprovada = screen.getByRole('article', { name: 'AUT-D00001' });
+    expect(within(aprovada).getByRole('button', { name: /Retirar agora/ })).toBeTruthy();
+    demo.expirar('AUT-D00001');
+    fireEvent.click(screen.getByRole('button', { name: /Atualizar/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('article', { name: 'AUT-D00001' }).textContent).toContain('Venceu no fim do turno'),
+    );
+    expect(
+      within(screen.getByRole('article', { name: 'AUT-D00001' })).queryByRole('button', { name: /Retirar agora/ }),
+    ).toBeNull();
+  });
+
+  it('terceiro: o servidor recusa retirada sem autorização aprovada, com itens diferentes ou já usada', async () => {
+    const demo = criarDemo({ atraso: 0 });
+    await demo.handle('POST', '/api/terminal/entrar', { matricula: 'T9001', senha: '362918' });
+    const auts = (await demo.handle('GET', '/api/terminal/autorizacoes?situacao=todas')).json as unknown as {
+      rows: { id: string; numero: string; itens: { ferramentaId: string; quantidade: number }[] }[];
+    };
+    const aprovada = auts.rows.find((a) => a.numero === 'AUT-D00001')!;
+    const recusada = auts.rows.find((a) => a.numero === 'AUT-D00002')!;
+    const foto = async () =>
+      (
+        (
+          await demo.handle('POST', '/api/terminal/fotos', {
+            etapa: 'entrega',
+            imagem: 'data:image/jpeg;base64,/9j/AAAA',
+            miniatura: 'data:image/jpeg;base64,/9j/BBBB',
+          })
+        ).json as unknown as { fotoId: string }
+      ).fotoId;
+    const corpo = async (extra: Record<string, unknown>) => ({
+      chave: `tm-terc-${Math.random().toString(36).slice(2, 10)}`,
+      itens: aprovada.itens.map((i) => ({ ferramentaId: i.ferramentaId, quantidade: i.quantidade })),
+      finalidade: 'terceira',
+      camm: 'CAMM 3',
+      termoAceito: true,
+      fotosEntrega: [await foto()],
+      semAlmoxarife: true,
+      recebimento: { conferido: true },
+      ...extra,
+    });
+    const post = async (extra: Record<string, unknown>) =>
+      demo.handle('POST', '/api/terminal/emprestimos', await corpo(extra));
+    expect((await post({})).status).toBe(409);
+    expect((await post({ autorizacaoId: recusada.id })).status).toBe(409);
+    const outros = await post({
+      autorizacaoId: aprovada.id,
+      itens: [{ ferramentaId: aprovada.itens[0]!.ferramentaId, quantidade: 2 }],
+    });
+    expect([outros.status, (outros.json as unknown as { erro: string }).erro]).toEqual([
+      409,
+      'Os itens não são os que o líder aprovou.',
+    ]);
+    expect((await post({ autorizacaoId: aprovada.id })).status).toBe(201);
+    expect((await post({ autorizacaoId: aprovada.id })).status).toBe(409);
+    // o líder (ou qualquer um) não aprova pelo tablet: não há rota de decisão no terminal
+    expect((await demo.handle('POST', `/api/terminal/autorizacoes/${aprovada.id}/decisao`, {})).status).toBe(404);
+  });
+});
+
 describe('demo do terminal (contrato da rota, migration 49)', () => {
   it('prazo do fim do turno pela hora de Brasília: antes das 18:00 → 18:00; depois → 07:00 do dia seguinte', () => {
     expect(new Date(prazoTurno(Date.UTC(2026, 10, 3, 12, 0))).toISOString()).toBe('2026-11-03T21:00:00.000Z');
@@ -561,18 +1011,28 @@ describe('demo do terminal (contrato da rota, migration 49)', () => {
     expect(new Date(prazoTurno(Date.UTC(2026, 10, 4, 10, 0))).toISOString()).toBe('2026-11-04T21:00:00.000Z');
   });
 
-  it('recusa retirada (RM), material, finalidade fora da lista, OM sem número e sem termo', async () => {
+  it('recusa retirada (RM), material, finalidade fora da lista, OM sem número, sem termo, sem foto e terceira sem conta', async () => {
     const demo = criarDemo({ atraso: 0 });
     await demo.handle('POST', '/api/terminal/entrar', { matricula: '10421', senha: '480256' });
     const ferr = (await demo.handle('GET', '/api/terminal/ferramentas?q=trena')).json as unknown as {
       rows: { id: string }[];
     };
+    const foto = (
+      await demo.handle('POST', '/api/terminal/fotos', {
+        etapa: 'entrega',
+        imagem: 'data:image/jpeg;base64,/9j/AAAA',
+        miniatura: 'data:image/jpeg;base64,/9j/BBBB',
+      })
+    ).json as unknown as { fotoId: string };
     const base = {
       chave: 'tm-teste-0001',
       itens: [{ ferramentaId: ferr.rows[0]!.id, quantidade: 1 }],
       finalidade: 'capex',
       camm: 'CAMM 1',
       termoAceito: true,
+      fotosEntrega: [foto.fotoId],
+      semAlmoxarife: true,
+      recebimento: { conferido: true },
     };
     const erro = async (corpo: Record<string, unknown>) =>
       ((await demo.handle('POST', '/api/terminal/emprestimos', { ...base, ...corpo })).json as { erro?: string }).erro;
@@ -582,8 +1042,32 @@ describe('demo do terminal (contrato da rota, migration 49)', () => {
     expect(await erro({ finalidade: 'om', finalidadeRef: '' })).toBe('Informe o número da OM.');
     expect(await erro({ termoAceito: undefined })).toMatch(/termo de responsabilidade/);
     expect(await erro({ camm: 'CAMM 9' })).toMatch(/CAMM inválida/);
+    expect(await erro({ fotosEntrega: [] })).toMatch(/fotos/);
+    expect(await erro({ semAlmoxarife: undefined })).toMatch(/almoxarife/);
+    expect(await erro({ recebimento: {} })).toMatch(/recebeu e conferiu/);
+    expect(await erro({ coassinaturaId: 'x' })).toMatch(/não os dois/);
+    expect(await erro({ finalidade: 'terceira' })).toMatch(/conta da empresa/);
     const r = await demo.handle('POST', '/api/terminal/emprestimos', base);
     expect(r.status).toBe(201);
+    expect((r.json as { recebimentoSituacao?: string }).recebimentoSituacao).toBe('ok');
+    // a foto já anexada não serve para outro registro
+    expect(await erro({ chave: 'tm-teste-0002' })).toMatch(/fotos/);
+    // sem recebimento: o empréstimo nasce com o "recebi" pendente
+    const outra = (
+      await demo.handle('POST', '/api/terminal/fotos', {
+        etapa: 'entrega',
+        imagem: 'data:image/jpeg;base64,/9j/AAAA',
+        miniatura: 'data:image/jpeg;base64,/9j/BBBB',
+      })
+    ).json as unknown as { fotoId: string };
+    const pend = await demo.handle('POST', '/api/terminal/emprestimos', {
+      ...base,
+      chave: 'tm-teste-0003',
+      fotosEntrega: [outra.fotoId],
+      recebimento: undefined,
+    });
+    expect([pend.status, (pend.json as { recebimentoSituacao?: string }).recebimentoSituacao]).toEqual([201, '']);
+    expect((pend.json as { entrega?: string }).entrega).toBe('aguardando_colaborador');
   });
 });
 

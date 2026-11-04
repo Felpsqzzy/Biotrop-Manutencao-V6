@@ -1,5 +1,5 @@
 /* Terminal do almoxarifado (tablet, 768–1280 px, retrato e paisagem). Prefixo tm-. Tokens --bm-* (claro/escuro).
-   Vidro (bm-vidro) só nas superfícies fixas: topo, bandeja, painel do login, fechamento da revisão e diálogos.
+   Vidro (bm-vidro) só nas superfícies de destaque: topo, bandeja, painel do login, fechamento da revisão e diálogos.
    Item repetido (cartão, linha) usa bm-painel, sem desfoque. Animação só de transform/opacity. */
 
 .tm-app {
@@ -1223,9 +1223,8 @@
   font-weight: 700;
   cursor: pointer;
 }
+/* não fica preso embaixo: preso, cobria o "Número da OM" (e o teclado do tablet aberto apertava ainda mais) */
 .tm-fechamento {
-  position: sticky;
-  bottom: var(--bm-s4);
   display: flex;
   flex-direction: column;
   gap: var(--bm-s3);
@@ -1489,4 +1488,136 @@
     padding: 0 var(--bm-s2);
     font-size: 0.95rem;
   }
+}
+
+/* ---------------------------------------------------------------- empréstimo (50): fotos, almoxarife, recebimento */
+.tm-faixa--ok {
+  background: var(--bm-ok-soft);
+  color: var(--tm-ok-texto);
+}
+.tm-fixo {
+  font-size: 1.1rem;
+}
+.tm-registro--foco {
+  outline: 2px solid var(--bm-accent);
+  outline-offset: 2px;
+}
+.tm-etapas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bm-s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tm-etapas__passo {
+  display: flex;
+  align-items: center;
+  gap: var(--bm-s2);
+  padding: var(--bm-s2) var(--bm-s3);
+  border-radius: var(--bm-r-pill);
+  border: 1px solid var(--bm-line-strong);
+  color: var(--bm-ink-2);
+  font-weight: 600;
+}
+.tm-etapas__passo b {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--bm-line);
+}
+.tm-etapas__passo.is-atual {
+  border-color: var(--bm-accent);
+  color: var(--bm-ink);
+}
+.tm-etapas__passo.is-atual b,
+.tm-etapas__passo.is-feito b {
+  background: var(--bm-accent);
+  color: #fff;
+}
+.tm-fotos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bm-s2);
+  margin: 0;
+}
+.tm-fotos__campo {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.tm-fotos__lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bm-s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tm-fotos__item {
+  position: relative;
+}
+.tm-fotos__mini {
+  display: block;
+  width: 104px;
+  height: 104px;
+  object-fit: cover;
+  border-radius: var(--bm-r-ctl);
+  border: 1px solid var(--bm-line-strong);
+  background: var(--bm-line);
+}
+.tm-fotos__tirar {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 60%);
+  color: #fff !important;
+  cursor: pointer;
+}
+.tm-fotos__conta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--bm-ink-2);
+  font-size: 0.9rem;
+}
+.tm-coassinatura {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bm-s3);
+  padding: var(--bm-s4);
+  border-radius: var(--bm-r-lg);
+}
+.tm-coassinatura__texto {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bm-s2);
+  margin: 0;
+  color: var(--bm-ink-2);
+}
+.tm-coassinatura__campos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--bm-s3);
+}
+.tm-recebimento,
+.tm-divergencia {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bm-s3);
+}
+.tm-divergencia {
+  padding: var(--bm-s4);
+  border-radius: var(--bm-r-lg);
 }

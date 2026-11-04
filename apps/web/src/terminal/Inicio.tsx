@@ -2,12 +2,24 @@
  * Logo depois do login: a tela inicial do empréstimo (só empréstimo de ferramentas, migration 49; a retirada sem
  * devolução saiu do terminal). Ações: pegar, devolver, meus empréstimos; e a faixa "Confirmar recebimento" quando o
  * almoxarife entregou no balcão um empréstimo que ainda espera o "recebi" do colaborador (dupla confirmação).
+ * Conta de terceiro (50): "Pegar ferramentas" vira pedido de autorização ao líder, "Minhas autorizações" entra nas
+ * ações e a faixa avisa quando há autorização aprovada para retirar.
  */
 import { m } from 'motion/react';
 import { Badge, Botao, Icone, MOVIMENTO } from '../ui';
 import { useTerminal } from './estado';
 import { IconeTm, type NomeIconeTm } from './icones';
-import { aberto, devolviveis, ehRM, pedeRecebimento, plural, prazoInfo, primeiroNome } from './regras';
+import {
+  aberto,
+  autorizacaoVigente,
+  devolviveis,
+  ehRM,
+  ehTerceiro,
+  pedeRecebimento,
+  plural,
+  prazoInfo,
+  primeiroNome,
+} from './regras';
 
 const entrada = (i: number) => ({
   initial: { opacity: 0, y: 14 },
@@ -26,7 +38,10 @@ interface Acao {
 }
 
 export function TelaInicio() {
-  const { sessao, ir, abertos, bandeja } = useTerminal();
+  const { sessao, ir, abertos, bandeja, autorizacoes } = useTerminal();
+  const terceiro = ehTerceiro(sessao?.colaborador);
+  const vigentes = (autorizacoes ?? []).filter((a) => autorizacaoVigente(a));
+  const aprovadas = vigentes.filter((a) => a.status === 'aprovada');
   const nome = primeiroNome(sessao?.colaborador.nome);
   const lista = abertos ?? [];
   const meusEM = lista.filter((e) => !ehRM(e) && aberto(e));
@@ -37,7 +52,7 @@ export function TelaInicio() {
     {
       id: 'pegar',
       titulo: 'Pegar ferramentas',
-      desc: 'Separe, confira e confirme o empréstimo.',
+      desc: terceiro ? 'Separe e peça a autorização do líder.' : 'Separe, confira e confirme o empréstimo.',
       icone: 'separar',
       principal: true,
       ir: () => ir('catalogo'),
@@ -51,6 +66,18 @@ export function TelaInicio() {
       ir: () => ir('devolver'),
       selo: aDevolver.length ? plural(aDevolver.length, 'em aberto', 'em aberto') : undefined,
     },
+    ...(terceiro
+      ? [
+          {
+            id: 'autorizacoes',
+            titulo: 'Minhas autorizações',
+            desc: 'Pedidos ao líder: aguardando, aprovados e recusados.',
+            icone: 'assinar' as const,
+            ir: () => ir('autorizacoes'),
+            selo: vigentes.length ? plural(vigentes.length, 'em aberto', 'em aberto') : undefined,
+          },
+        ]
+      : []),
     {
       id: 'meus',
       titulo: 'Meus empréstimos',
@@ -77,6 +104,17 @@ export function TelaInicio() {
           </span>
           <Botao variante="acao" onClick={() => ir('receber')}>
             <Icone nome="check" tamanho={20} /> Confirmar recebimento
+          </Botao>
+        </div>
+      )}
+      {aprovadas.length > 0 && (
+        <div className="tm-faixa tm-faixa--ok tm-faixa--acao" role="status">
+          <Icone nome="check" tamanho={20} />
+          <span className="tm-faixa__texto">
+            {plural(aprovadas.length, 'autorização aprovada', 'autorizações aprovadas')}: retire até o fim do turno.
+          </span>
+          <Botao variante="acao" onClick={() => ir('autorizacoes')}>
+            Ver e retirar
           </Botao>
         </div>
       )}

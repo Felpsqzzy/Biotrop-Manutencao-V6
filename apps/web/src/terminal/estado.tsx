@@ -4,6 +4,9 @@
  * inatividade (aviso nos últimos 15 s, depois POST /sair e tela inicial), digitação sem sessão (e a saída
  * administrativa aberta) some depois de 1 min, saída administrativa escondida e recarga quando a versão publicada muda
  * (parado na tela inicial). Durante um envio (ocupado), a navegação fica parada.
+ * Rascunhos por fluxo: a entrega no tablet (fotos, almoxarife, recebimento) e as autorizações da conta de terceiro.
+ * Espera longa (câmera aberta, almoxarife a caminho, líder decidindo): segurarSessao() renova a sessão no servidor a cada
+ * 30 s por até 5 min; passou disso, volta o aviso de inatividade, e "Continuar usando" retoma a espera.
  */
 import {
   createContext,
@@ -20,8 +23,18 @@ import {
 } from 'react';
 import { useToast } from '../ui';
 import { chamar as chamarApi, erroDe, lista, type Json, type Metodo, type Resposta } from './api';
-import { assinatura, novaChave, primeiroNome, texto } from './regras';
-import type { Emprestimo, Separado, Sessao, Turno } from './tipos';
+import { assinatura, ehTerceiro, novaChave, primeiroNome, texto } from './regras';
+import type {
+  Autorizacao,
+  Coassinatura,
+  DivergenciaNova,
+  Emprestimo,
+  Finalidade,
+  FotoEnviada,
+  Separado,
+  Sessao,
+  Turno,
+} from './tipos';
 import { conferirVersao } from './versao';
 
 export type Tela =
@@ -36,7 +49,10 @@ export type Tela =
   | 'devolver-revisao'
   | 'devolver-ok'
   | 'receber'
-  | 'meus';
+  | 'meus'
+  | 'entrega'
+  | 'autorizacoes'
+  | 'conferencia';
 
 export interface ResultadoEmprestimo {
   id: string;
@@ -46,6 +62,35 @@ export interface ResultadoEmprestimo {
   prazo: string | null;
   prazoFalhou: boolean;
   outros: boolean;
+  /** Quem confirmou a entrega no tablet ('' = sem almoxarife no turno). */
+  entreguePor: string;
+  divergencia: boolean;
+}
+
+/** O que foi pedido na revisão (ou o que o líder aprovou, travado): vai inteiro no POST /emprestimos. */
+export interface Pedido {
+  itens: Separado[];
+  finalidade: Finalidade;
+  finalidadeRef: string;
+  camm: string;
+  autorizacaoId?: string;
+  autorizacaoNumero?: string;
+}
+/** Recebimento: "recebi, conferi e estão em boas condições" ou as divergências (cada uma com foto). */
+export interface EscolhaRecebimento {
+  modo: '' | 'ok' | 'divergencia';
+  divergencias: DivergenciaNova[];
+  termo: boolean;
+}
+export const RECEBIMENTO_VAZIO: EscolhaRecebimento = { modo: '', divergencias: [], termo: false };
+/** Rascunho da entrega no tablet: 1 fotos, 2 almoxarife (ou sem almoxarife), 3 recebimento. */
+export interface RascunhoEntrega {
+  pedido: Pedido;
+  passo: 'fotos' | 'almoxarife' | 'recebimento';
+  fotos: FotoEnviada[];
+  coassinatura: Coassinatura | null;
+  semAlmoxarife: boolean;
+  recebimento: EscolhaRecebimento;
 }
 export interface SelDev {
   quantidade: number;
@@ -56,6 +101,8 @@ export interface Devolucao {
   id: string;
   sel: Record<string, SelDev>;
   de: 'devolver' | 'meus';
+  /** Fotos da devolução (obrigatórias, 1 a 5), já salvas como rascunho no servidor. */
+  fotos: FotoEnviada[];
 }
 export interface ItemDevolvido {
   itemId: string;
@@ -66,10 +113,12 @@ export interface ItemDevolvido {
   observacao: string;
 }
 export interface ResultadoDevolucao {
+  emprestimoId: string;
   numero: string;
   repetido: boolean;
   itens: ItemDevolvido[];
   outra: boolean;
+  semAlmoxarife: boolean;
 }
 
 const AVISO_S = 15;
@@ -79,6 +128,9 @@ const LIMPA_MS = 60000;
 const ESPERA_MS = 20000;
 const VERSAO_MS = 300000;
 export const SAIDA_MS = 1400;
+/** Espera longa segurando a sessão (câmera, almoxarife, líder): até 5 min, renovando a cada 30 s. */
+export const ESPERA_LONGA_MS = 300000;
+const RENOVA_MS = 30000;
 const TELAS_PUBLICAS: Tela[] = ['entrada', 'primeiro'];
 
 interface Contexto {
@@ -98,7 +150,7 @@ interface Contexto {
   mudarBandeja: (fn: (b: Separado[]) => Separado[]) => void;
   /** Chave da operação do empréstimo: a mesma até o servidor confirmar. */
   chave: () => string;
-  concluirEmprestimo: (j: Json, itens: Separado[]) => void;
+  concluirEmprestimo: (j: Json, itens: Separado[], extra?: { entreguePor?: string; divergencia?: boolean }) => void;
   resultado: ResultadoEmprestimo | null;
   /** Prazo de um empréstimo feito agora e o termo (GET /prazo; muda às 18:00). null = ainda não veio. */
   turno: Turno | null;
@@ -121,6 +173,20 @@ interface Contexto {
   setOcupado: (v: boolean) => void;
   saindo: { motivo: 'logout' | 'inatividade'; nome: string } | null;
   fecharSaindo: () => void;
+  entrega: RascunhoEntrega | null;
+  setEntrega: Dispatch<SetStateAction<RascunhoEntrega | null>>;
+  /** Começa a entrega (fotos, almoxarife, recebimento) do pedido revisado ou da autorização aprovada. */
+  iniciarEntrega: (p: Pedido) => void;
+  autorizacoes: Autorizacao[] | null;
+  autorizacoesErro: string;
+  carregarAutorizacoes: () => void;
+  /** Autorização em destaque na tela de autorizações (a recém-enviada). */
+  autFoco: string | null;
+  setAutFoco: (id: string | null) => void;
+  /** Espera longa: segura a sessão (renova no servidor) até a função devolvida ser chamada (ou 5 min). */
+  segurarSessao: () => () => void;
+  /** Pedido de autorização aceito pelo servidor: a chave troca, a bandeja esvazia e a espera abre. */
+  concluirAutorizacao: (id: string) => void;
 }
 
 const Ctx = createContext<Contexto | null>(null);
@@ -149,6 +215,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const [adminAberto, setAdminAberto] = useState(false);
   const [ocupado, setOcupadoEstado] = useState(false);
   const [saindo, setSaindo] = useState<Contexto['saindo']>(null);
+  const [entrega, setEntrega] = useState<RascunhoEntrega | null>(null);
+  const [autorizacoes, setAutorizacoes] = useState<Autorizacao[] | null>(null);
+  const [autorizacoesErro, setAutorizacoesErro] = useState('');
+  const [autFoco, setAutFoco] = useState<string | null>(null);
 
   // refs: o que os temporizadores e as respostas assíncronas leem sem depender de render
   const geracao = useRef(0);
@@ -164,6 +234,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const chavesDev = useRef<Record<string, { chave: string; incerto: string | null }>>({});
   const seqAbertos = useRef(0);
   const seqTurno = useRef(0);
+  const seqAut = useRef(0);
+  const segurando = useRef(0);
+  const seguraDesde = useRef(0);
   const versaoConferida = useRef(Date.now());
   const avisoRef = useRef<number | null>(null);
   avisoRef.current = avisoResta;
@@ -194,6 +267,11 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     setAbertosErro('');
     setDev(null);
     setResultadoDev(null);
+    setEntrega(null);
+    setAutorizacoes(null);
+    setAutorizacoesErro('');
+    setAutFoco(null);
+    segurando.current = 0;
     setAvisoResta(null);
     setRecado(msg ? { texto: msg, tom } : null);
     setGeracaoEntrada((g) => g + 1);
@@ -247,12 +325,25 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     });
   }, [chamar]);
 
+  // conta de terceiro: os pedidos de autorização ao líder (abertos e os decididos)
+  const carregarAutorizacoes = useCallback(() => {
+    const seq = ++seqAut.current;
+    setAutorizacoesErro('');
+    void chamar('GET', '/autorizacoes?situacao=todas').then((r) => {
+      if (r.velho || seq !== seqAut.current) return;
+      if (!r.ok) setAutorizacoesErro(erroDe(r));
+      else setAutorizacoes(lista<Autorizacao>(r.json.rows));
+    });
+  }, [chamar]);
+
   const ir = useCallback(
     (nova: Tela) => {
       if (ocupadoRef.current) return; // envio em andamento: a tela fica até a resposta
       if (!sessaoRef.current && !TELAS_PUBLICAS.includes(nova)) nova = 'entrada';
       if (nova === 'inicio' || nova === 'devolver' || nova === 'receber') carregarAbertos();
-      if (nova === 'revisao' || nova === 'receber') carregarTurno();
+      if (nova === 'revisao' || nova === 'receber' || nova === 'entrega') carregarTurno();
+      if ((nova === 'inicio' && ehTerceiro(sessaoRef.current?.colaborador)) || nova === 'autorizacoes')
+        carregarAutorizacoes();
       setTela(nova);
       if (sessaoRef.current) setRecado(null);
       try {
@@ -261,7 +352,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         /* jsdom */
       }
     },
-    [carregarAbertos, carregarTurno],
+    [carregarAbertos, carregarTurno, carregarAutorizacoes],
   );
 
   const abrirSessao = useCallback(
@@ -353,6 +444,12 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         }
         return;
       }
+      // espera longa (câmera, almoxarife, líder): renova a sessão por até 5 min; depois, o aviso de sempre
+      if (segurando.current > 0 && t - seguraDesde.current < ESPERA_LONGA_MS) {
+        if (t - ultimoContato.current > RENOVA_MS) manterSessao();
+        if (avisoRef.current != null) setAvisoResta(null);
+        return;
+      }
       const fim = ultimoContato.current + s.inatividade * 1000 - MARGEM_MS;
       const resta = Math.ceil((fim - t) / 1000);
       if (resta <= 0) {
@@ -368,7 +465,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       clearInterval(id);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [sair, voltarInicio]);
+  }, [sair, voltarInicio, manterSessao]);
 
   // "Voltar" do navegador não tira ninguém do terminal por engano (a trava de verdade é o modo quiosque)
   useEffect(() => {
@@ -409,13 +506,51 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
 
   const mudarBandeja = useCallback((fn: (b: Separado[]) => Separado[]) => setBandeja(fn), []);
 
+  const segurarSessao = useCallback(() => {
+    if (segurando.current++ === 0) seguraDesde.current = Date.now();
+    let solto = false;
+    return () => {
+      if (solto) return;
+      solto = true;
+      segurando.current = Math.max(0, segurando.current - 1);
+      // voltou da câmera (ou o almoxarife chegou): conta como uso e a sessão recomeça do zero
+      ultimaAtividade.current = Date.now();
+      if (sessaoRef.current && Date.now() - ultimoContato.current > PING_MS) manterSessao();
+    };
+  }, [manterSessao]);
+
+  const concluirAutorizacao = useCallback(
+    (id: string) => {
+      chaveAtual.current = null;
+      setBandeja([]);
+      setAutFoco(id);
+      ir('autorizacoes');
+    },
+    [ir],
+  );
+
+  const iniciarEntrega = useCallback(
+    (p: Pedido) => {
+      setEntrega({
+        pedido: p,
+        passo: 'fotos',
+        fotos: [],
+        coassinatura: null,
+        semAlmoxarife: false,
+        recebimento: RECEBIMENTO_VAZIO,
+      });
+      ir('entrega');
+    },
+    [ir],
+  );
+
   const chave = useCallback(() => {
     if (!chaveAtual.current) chaveAtual.current = novaChave();
     return chaveAtual.current;
   }, []);
 
   const concluirEmprestimo = useCallback(
-    (j: Json, itens: Separado[]) => {
+    (j: Json, itens: Separado[], extra: { entreguePor?: string; divergencia?: boolean } = {}) => {
       const res: ResultadoEmprestimo = {
         id: texto(j.id),
         numero: texto(j.numero),
@@ -425,10 +560,14 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         prazo: texto(j.prazo) || null,
         prazoFalhou: false,
         outros: false,
+        entreguePor: extra.entreguePor ?? '',
+        divergencia: extra.divergencia === true || j.recebimentoSituacao === 'divergencia',
       };
       // só agora a chave troca: o servidor confirmou
       chaveAtual.current = null;
       setBandeja([]);
+      setEntrega(null);
+      setAutorizacoes(null);
       setAbertos(null);
       setResultado(res);
       setTela('sucesso');
@@ -494,6 +633,8 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       avisoResta,
       continuarSessao: () => {
         setAvisoResta(null);
+        // numa espera longa, "Continuar usando" retoma a espera do começo
+        if (segurando.current > 0) seguraDesde.current = Date.now();
         manterSessao();
       },
       adminAberto,
@@ -502,6 +643,16 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       setOcupado,
       saindo,
       fecharSaindo: () => setSaindo(null),
+      entrega,
+      setEntrega,
+      iniciarEntrega,
+      autorizacoes,
+      autorizacoesErro,
+      carregarAutorizacoes,
+      autFoco,
+      setAutFoco,
+      segurarSessao,
+      concluirAutorizacao,
     }),
     [
       sessao,
@@ -532,7 +683,21 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       ocupado,
       setOcupado,
       saindo,
+      entrega,
+      iniciarEntrega,
+      autorizacoes,
+      autorizacoesErro,
+      carregarAutorizacoes,
+      autFoco,
+      segurarSessao,
+      concluirAutorizacao,
     ],
   );
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
+}
+
+/** Segura a sessão enquanto `ativo` (espera longa: almoxarife a caminho, líder decidindo). */
+export function useSegurarSessao(ativo: boolean) {
+  const { segurarSessao } = useTerminal();
+  useEffect(() => (ativo ? segurarSessao() : undefined), [ativo, segurarSessao]);
 }
