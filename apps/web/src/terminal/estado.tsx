@@ -1,6 +1,6 @@
 /**
- * Estado do terminal (só na memória desta página; some ao sair): sessão, tela, módulo (EM × RM), bandejas, chaves de
- * operação, resultados e as regras de segurança da V5 — 401 encerra, resposta de sessão antiga é ignorada (geração),
+ * Estado do terminal (só na memória desta página; some ao sair): sessão, tela, bandeja, chaves de operação, prazo do
+ * turno e termo, resultados e as regras de segurança da V5 — 401 encerra, resposta de sessão antiga é ignorada (geração),
  * inatividade (aviso nos últimos 15 s, depois POST /sair e tela inicial), digitação sem sessão (e a saída
  * administrativa aberta) some depois de 1 min, saída administrativa escondida e recarga quando a versão publicada muda
  * (parado na tela inicial). Durante um envio (ocupado), a navegação fica parada.
@@ -19,15 +19,14 @@ import {
   type SetStateAction,
 } from 'react';
 import { useToast } from '../ui';
-import { chamar as chamarApi, lista, type Json, type Metodo, type Resposta } from './api';
+import { chamar as chamarApi, erroDe, lista, type Json, type Metodo, type Resposta } from './api';
 import { assinatura, novaChave, primeiroNome, texto } from './regras';
-import type { Emprestimo, Modulo, Separado, Sessao } from './tipos';
+import type { Emprestimo, Separado, Sessao, Turno } from './tipos';
 import { conferirVersao } from './versao';
 
 export type Tela =
   | 'entrada'
   | 'primeiro'
-  | 'modulos'
   | 'inicio'
   | 'catalogo'
   | 'revisao'
@@ -36,12 +35,12 @@ export type Tela =
   | 'devolver-itens'
   | 'devolver-revisao'
   | 'devolver-ok'
+  | 'receber'
   | 'meus';
 
-export interface ResultadoRetirada {
+export interface ResultadoEmprestimo {
   id: string;
   numero: string;
-  modalidade: Modulo;
   repetido: boolean;
   itens: Separado[];
   prazo: string | null;
@@ -85,8 +84,7 @@ const TELAS_PUBLICAS: Tela[] = ['entrada', 'primeiro'];
 interface Contexto {
   sessao: Sessao | null;
   tela: Tela;
-  modulo: Modulo | null;
-  ir: (tela: Tela, modulo?: Modulo) => void;
+  ir: (tela: Tela) => void;
   chamar: (metodo: Metodo, caminho: string, corpo?: unknown, publica?: boolean) => Promise<Resposta>;
   /** Espera o POST /sair anterior antes de um novo login. */
   aguardarLimpeza: () => Promise<void>;
@@ -98,10 +96,14 @@ interface Contexto {
   geracaoEntrada: number;
   bandeja: Separado[];
   mudarBandeja: (fn: (b: Separado[]) => Separado[]) => void;
-  /** Chave da operação do módulo: a mesma até o servidor confirmar. */
-  chaveDe: (m: Modulo) => string;
-  concluirRetirada: (j: Json, itens: Separado[], modalidade: Modulo) => void;
-  resultado: ResultadoRetirada | null;
+  /** Chave da operação do empréstimo: a mesma até o servidor confirmar. */
+  chave: () => string;
+  concluirEmprestimo: (j: Json, itens: Separado[]) => void;
+  resultado: ResultadoEmprestimo | null;
+  /** Prazo de um empréstimo feito agora e o termo (GET /prazo; muda às 18:00). null = ainda não veio. */
+  turno: Turno | null;
+  turnoErro: string;
+  carregarTurno: () => void;
   abertos: Emprestimo[] | null;
   abertosErro: string;
   carregarAbertos: () => void;
@@ -114,7 +116,7 @@ interface Contexto {
   continuarSessao: () => void;
   adminAberto: boolean;
   setAdminAberto: (v: boolean) => void;
-  /** Envio em andamento (confirmar o pedido): ir() não troca de tela nem de módulo até a resposta. */
+  /** Envio em andamento (confirmar o pedido): ir() não troca de tela até a resposta. */
   ocupado: boolean;
   setOcupado: (v: boolean) => void;
   saindo: { motivo: 'logout' | 'inatividade'; nome: string } | null;
@@ -129,17 +131,16 @@ export function useTerminal(): Contexto {
   return c;
 }
 
-const vazio = (): Record<Modulo, Separado[]> => ({ emprestimo: [], retirada: [] });
-
 export function TerminalProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const [sessao, setSessao] = useState<Sessao | null>(null);
   const [tela, setTela] = useState<Tela>('entrada');
-  const [modulo, setModulo] = useState<Modulo | null>(null);
   const [recado, setRecado] = useState<Contexto['recado']>(null);
   const [geracaoEntrada, setGeracaoEntrada] = useState(0);
-  const [bandejas, setBandejas] = useState(vazio);
-  const [resultado, setResultado] = useState<ResultadoRetirada | null>(null);
+  const [bandeja, setBandeja] = useState<Separado[]>([]);
+  const [resultado, setResultado] = useState<ResultadoEmprestimo | null>(null);
+  const [turno, setTurno] = useState<Turno | null>(null);
+  const [turnoErro, setTurnoErro] = useState('');
   const [abertos, setAbertos] = useState<Emprestimo[] | null>(null);
   const [abertosErro, setAbertosErro] = useState('');
   const [dev, setDev] = useState<Devolucao | null>(null);
@@ -159,9 +160,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const emVoo = useRef(0);
   const pingando = useRef(false);
   const limpeza = useRef<Promise<void>>(Promise.resolve());
-  const chaves = useRef<Record<Modulo, string | null>>({ emprestimo: null, retirada: null });
+  const chaveAtual = useRef<string | null>(null);
   const chavesDev = useRef<Record<string, { chave: string; incerto: string | null }>>({});
   const seqAbertos = useRef(0);
+  const seqTurno = useRef(0);
   const versaoConferida = useRef(Date.now());
   const avisoRef = useRef<number | null>(null);
   avisoRef.current = avisoResta;
@@ -176,7 +178,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const voltarInicio = useCallback((msg?: string, tom: 'ok' | 'info' = 'info') => {
     geracao.current += 1;
     sessaoRef.current = null;
-    chaves.current = { emprestimo: null, retirada: null };
+    chaveAtual.current = null;
     chavesDev.current = {};
     sujo.current = false;
     ocupadoRef.current = false;
@@ -184,9 +186,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     setAdminAberto(false);
     setSessao(null);
     setTela('entrada');
-    setModulo(null);
-    setBandejas(vazio());
+    setBandeja([]);
     setResultado(null);
+    setTurno(null);
+    setTurnoErro('');
     setAbertos(null);
     setAbertosErro('');
     setDev(null);
@@ -230,13 +233,26 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     });
   }, [chamar]);
 
+  // prazo e termo de um empréstimo feito agora: relidos ao abrir a revisão e o recebimento (o prazo vira às 18:00)
+  const carregarTurno = useCallback(() => {
+    const seq = ++seqTurno.current;
+    setTurnoErro('');
+    void chamar('GET', '/prazo').then((r) => {
+      if (r.velho || seq !== seqTurno.current) return;
+      if (!r.ok || !texto(r.json.termo)) {
+        setTurnoErro(r.ok ? 'Não foi possível buscar o termo de responsabilidade.' : erroDe(r));
+        return;
+      }
+      setTurno({ prazo: texto(r.json.prazo) || null, termo: texto(r.json.termo) });
+    });
+  }, [chamar]);
+
   const ir = useCallback(
-    (nova: Tela, m?: Modulo) => {
+    (nova: Tela) => {
       if (ocupadoRef.current) return; // envio em andamento: a tela fica até a resposta
       if (!sessaoRef.current && !TELAS_PUBLICAS.includes(nova)) nova = 'entrada';
-      if (m) setModulo(m);
-      if (nova === 'modulos') setModulo(null);
-      if (nova === 'modulos' || nova === 'inicio' || nova === 'devolver') carregarAbertos();
+      if (nova === 'inicio' || nova === 'devolver' || nova === 'receber') carregarAbertos();
+      if (nova === 'revisao' || nova === 'receber') carregarTurno();
       setTela(nova);
       if (sessaoRef.current) setRecado(null);
       try {
@@ -245,7 +261,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         /* jsdom */
       }
     },
-    [carregarAbertos],
+    [carregarAbertos, carregarTurno],
   );
 
   const abrirSessao = useCallback(
@@ -254,14 +270,13 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       const s: Sessao = {
         colaborador: c,
         inatividade: Math.min(Math.max(Number(j.inatividadeSegundos) || 90, 20), 3600),
-        prazoPadraoHoras: Number(j.prazoPadraoHoras) > 0 ? Number(j.prazoPadraoHoras) : null,
       };
       sessaoRef.current = s;
       ultimoContato.current = ultimaAtividade.current = Date.now();
       setSessao(s);
       setRecado(null);
       if (msg) toast.mostrar({ texto: msg, tom: 'ok' });
-      ir('modulos');
+      ir('inicio');
     },
     [ir, toast],
   );
@@ -392,37 +407,28 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [saindo]);
 
-  const mudarBandeja = useCallback(
-    (fn: (b: Separado[]) => Separado[]) => {
-      if (!modulo) return;
-      setBandejas((t) => ({ ...t, [modulo]: fn(t[modulo]) }));
-    },
-    [modulo],
-  );
+  const mudarBandeja = useCallback((fn: (b: Separado[]) => Separado[]) => setBandeja(fn), []);
 
-  const chaveDe = useCallback((m: Modulo) => {
-    const atual = chaves.current[m];
-    if (atual) return atual;
-    const nova = novaChave();
-    chaves.current[m] = nova;
-    return nova;
+  const chave = useCallback(() => {
+    if (!chaveAtual.current) chaveAtual.current = novaChave();
+    return chaveAtual.current;
   }, []);
 
-  const concluirRetirada = useCallback(
-    (j: Json, itens: Separado[], modalidade: Modulo) => {
-      const res: ResultadoRetirada = {
+  const concluirEmprestimo = useCallback(
+    (j: Json, itens: Separado[]) => {
+      const res: ResultadoEmprestimo = {
         id: texto(j.id),
         numero: texto(j.numero),
         repetido: j.repetido === true,
         itens,
-        prazo: null,
+        // prazo do fim do turno, calculado pelo servidor (vem na resposta; se não vier, sai do registro abaixo)
+        prazo: texto(j.prazo) || null,
         prazoFalhou: false,
         outros: false,
-        modalidade: j.modalidade === 'retirada' || j.modalidade === 'emprestimo' ? j.modalidade : modalidade,
       };
       // só agora a chave troca: o servidor confirmou
-      chaves.current[modalidade] = null;
-      setBandejas((t) => ({ ...t, [modalidade]: [] }));
+      chaveAtual.current = null;
+      setBandeja([]);
       setAbertos(null);
       setResultado(res);
       setTela('sucesso');
@@ -432,8 +438,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           d.ok && d.json.emprestimo && typeof d.json.emprestimo === 'object' ? (d.json.emprestimo as Emprestimo) : null;
         const novo = { ...res };
         if (emp?.prazo) novo.prazo = emp.prazo;
-        else novo.prazoFalhou = true;
-        if (emp?.modalidade === 'retirada' || emp?.modalidade === 'emprestimo') novo.modalidade = emp.modalidade;
+        else if (!novo.prazo) novo.prazoFalhou = true;
         // repetido: o servidor devolveu o pedido enviado antes; se os itens não são os desta bandeja, mostra os registrados
         if (emp && res.repetido) {
           const reg: Separado[] = (emp.itensLista ?? [])
@@ -447,7 +452,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
               nome: i.descricao,
               maximo: Number(i.quantidade) || 0,
             }));
-          if (reg.length && (assinatura(reg) !== assinatura(itens) || novo.modalidade !== modalidade)) {
+          if (reg.length && assinatura(reg) !== assinatura(itens)) {
             novo.itens = reg;
             novo.outros = true;
           }
@@ -462,7 +467,6 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     () => ({
       sessao,
       tela,
-      modulo,
       ir,
       chamar,
       aguardarLimpeza: () => limpeza.current,
@@ -471,11 +475,14 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       voltarInicio,
       recado,
       geracaoEntrada,
-      bandeja: modulo ? bandejas[modulo] : [],
+      bandeja,
       mudarBandeja,
-      chaveDe,
-      concluirRetirada,
+      chave,
+      concluirEmprestimo,
       resultado,
+      turno,
+      turnoErro,
+      carregarTurno,
       abertos,
       abertosErro,
       carregarAbertos,
@@ -499,7 +506,6 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     [
       sessao,
       tela,
-      modulo,
       ir,
       chamar,
       abrirSessao,
@@ -507,11 +513,14 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       voltarInicio,
       recado,
       geracaoEntrada,
-      bandejas,
+      bandeja,
       mudarBandeja,
-      chaveDe,
-      concluirRetirada,
+      chave,
+      concluirEmprestimo,
       resultado,
+      turno,
+      turnoErro,
+      carregarTurno,
       abertos,
       abertosErro,
       carregarAbertos,

@@ -2,11 +2,12 @@
  * Devolução (só Empréstimo: a retirada não volta). Escolhe o empréstimo, marca o que está devolvendo (quantidade e
  * condição; avaria pede descrição), revisa e confirma. A chave da devolução é uma por empréstimo e só troca depois que
  * o servidor confirma; se o primeiro envio ficou sem resposta e o reenvio mudou, a tela avisa que valeu o primeiro.
+ * "Sem almoxarife no turno" (49: noite e fim de semana) marca a devolução e a conferência fica para o próximo.
  */
 import { useEffect, useState } from 'react';
 import { Badge, Botao, EmptyState, Icone } from '../ui';
 import { erroDe } from './api';
-import { CabecalhoTela, Carregando, CheckDesenhado, Contador, Segmento, useToqueProtegido } from './comum';
+import { Aceite, CabecalhoTela, Carregando, CheckDesenhado, Contador, Segmento, useToqueProtegido } from './comum';
 import { useTerminal, type ItemDevolvido, type SelDev } from './estado';
 import { IconeTm } from './icones';
 import { aberto, dataHora, devolviveis, ehRM, num, novaChave, plural, prazoInfo, texto } from './regras';
@@ -248,6 +249,7 @@ export function TelaDevolverRevisao() {
   const e = useEmprestimoDev();
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
+  const [semAlmoxarife, setSemAlmoxarife] = useState(false);
   if (!dev || !e) return null;
   const itens = itensDevolvidos(e, dev.sel);
 
@@ -263,10 +265,11 @@ export function TelaDevolverRevisao() {
     const conteudo = JSON.stringify(corpoItens);
     setErro('');
     setEnviando(true);
-    setOcupado(true); // até a resposta: nada de Voltar, Alterar ou troca de módulo
+    setOcupado(true); // até a resposta: nada de Voltar nem Alterar
     const r = await chamar('POST', `/emprestimos/${encodeURIComponent(e.id)}/devolucoes`, {
       chave: k.chave,
       itens: corpoItens,
+      ...(semAlmoxarife ? { semAlmoxarife: true } : {}),
     });
     if (r.velho) return;
     setOcupado(false);
@@ -322,6 +325,10 @@ export function TelaDevolverRevisao() {
         <p className="tm-prazo tm-prazo--info">
           <Icone nome="info" tamanho={22} /> Deixe as ferramentas no balcão: o almoxarifado confere a devolução.
         </p>
+        <Aceite marcado={semAlmoxarife} aoMudar={setSemAlmoxarife} desligado={enviando}>
+          <b>Sem almoxarife no turno</b>
+          <small>A conferência fica para o próximo almoxarife.</small>
+        </Aceite>
         <MensagemErro texto={erro} />
         <div className="tm-acoes">
           <Botao className="tm-botao-grande" disabled={enviando} onClick={() => ir('devolver-itens')}>

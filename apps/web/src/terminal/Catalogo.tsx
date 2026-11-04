@@ -2,8 +2,9 @@
  * Catálogo único (sem "por quantidade" × "por patrimônio" à vista): busca, chips de categoria e peças iguais agrupadas.
  * Um botão por item: "Separar". Por quantidade, cada toque soma um (vira contador − n +); por etiqueta (unidade de
  * patrimônio/série ou peça de um grupo FMNT), "Separar" abre a folha para escolher a etiqueta. Vista em cartões ou em
- * lista (lembrada neste navegador); mais de 100 itens, a lista é virtualizada. Retirada pede ao servidor só os
- * retiráveis (?modalidade=retirada); o servidor manda até 1000 e, passou disso, "cortado" pede para refinar a busca.
+ * lista (lembrada neste navegador); mais de 100 itens, a lista é virtualizada. Só ferramentas, todas as ativas (49):
+ * cada uma mostra a CAMM onde fica e os chips de CAMM filtram no servidor (?camm=, opcional; quem retira escolhe a CAMM
+ * dele na revisão, sem esconder as outras). O servidor manda até 1000 e, passou disso, "cortado" pede para refinar.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -16,6 +17,8 @@ import { iconeCategoria, IconeTm } from './icones';
 import {
   agrupar,
   alternarEtiqueta,
+  CAMMS,
+  cammDe,
   categoriaDe,
   categorias,
   disponivel,
@@ -53,13 +56,14 @@ function gravarVista(v: Vista) {
 function opcoesDaFolha(
   e: Entrada,
 ): { f: Ferramenta; unidade?: { id: string; identificador: string }; rotulo: string; local: string; livre: boolean }[] {
+  const onde = (f: Ferramenta) => [cammDe(f), texto(f.localizacao)].filter(Boolean).join(' · ');
   if (e.tipo === 'grupo')
-    return e.itens.map((f) => ({ f, rotulo: f.codigo, local: texto(f.localizacao), livre: disponivel(f) > 0 }));
+    return e.itens.map((f) => ({ f, rotulo: f.codigo, local: onde(f), livre: disponivel(f) > 0 }));
   return (e.f.unidadesDisponiveis ?? []).map((u) => ({
     f: e.f,
     unidade: u,
     rotulo: u.identificador,
-    local: texto(e.f.localizacao),
+    local: onde(e.f),
     livre: true,
   }));
 }
@@ -253,6 +257,7 @@ function ItemCatalogo({
         <h3 className="tm-item__nome">{r.nome}</h3>
         <p className="tm-item__meta">
           <span className={r.livres > 0 ? 'tm-item__livres' : 'tm-item__livres is-zero'}>{livresTxt}</span>
+          {r.camm && <span className="tm-item__camm">{r.camm}</span>}
           {r.local && (
             <span className="tm-item__local">
               <IconeTm nome="local" tamanho={15} /> {r.local}
@@ -341,10 +346,10 @@ function ListaVirtual({
 }
 
 export function TelaCatalogo() {
-  const { modulo, chamar, ir } = useTerminal();
-  const rm = modulo === 'retirada';
+  const { chamar, ir } = useTerminal();
   const [busca, setBusca] = useState('');
   const [cat, setCat] = useState('');
+  const [camm, setCamm] = useState('');
   const [rows, setRows] = useState<Ferramenta[] | null>(null);
   const [cortado, setCortado] = useState(false);
   const [erro, setErro] = useState('');
@@ -361,7 +366,7 @@ export function TelaCatalogo() {
       () => {
         const p = new URLSearchParams();
         if (q) p.set('q', q);
-        if (rm) p.set('modalidade', 'retirada');
+        if (camm) p.set('camm', camm);
         const qs = p.toString();
         void chamar('GET', `/ferramentas${qs ? `?${qs}` : ''}`).then((r) => {
           if (r.velho || n !== seq.current) return;
@@ -374,9 +379,8 @@ export function TelaCatalogo() {
       q ? 300 : 0,
     );
     return () => clearTimeout(t);
-  }, [busca, chamar, recarga, rm]);
+  }, [busca, camm, chamar, recarga]);
 
-  // Retirada (RM): o servidor já manda só o que foi liberado para sair do estoque (filtro no banco, antes do limite)
   const visiveis = useMemo(() => rows ?? [], [rows]);
   const cats = useMemo(() => categorias(visiveis), [visiveis]);
   const entradas = useMemo(
@@ -396,12 +400,8 @@ export function TelaCatalogo() {
     <section className="tm-tela tm-catalogo">
       <div ref={acima} className="tm-catalogo__topo">
         <CabecalhoTela
-          titulo={rm ? 'Retirar' : 'Pegar ferramentas'}
-          sub={
-            rm
-              ? 'Só aparecem os itens liberados para retirada. Eles não voltam ao almoxarifado.'
-              : 'Toque em Separar. Depois, revise e confirme o empréstimo.'
-          }
+          titulo="Pegar ferramentas"
+          sub="Toque em Separar. Depois, revise e confirme o empréstimo."
           voltar={() => ir('inicio')}
           extra={
             <Segmento<Vista>
@@ -421,7 +421,7 @@ export function TelaCatalogo() {
           <input
             type="search"
             className="tm-busca__campo"
-            placeholder={rm ? 'Buscar item para retirar' : 'Buscar por nome ou código'}
+            placeholder="Buscar por nome ou código"
             aria-label="Buscar ferramenta"
             autoComplete="off"
             autoCapitalize="off"
@@ -435,6 +435,28 @@ export function TelaCatalogo() {
               <Icone nome="fechar" tamanho={20} />
             </button>
           )}
+        </div>
+        <div className="tm-chips" role="group" aria-label="CAMM">
+          {['', ...CAMMS].map((c) => (
+            <button
+              key={c || 'todas'}
+              type="button"
+              className={`tm-chip${camm === c ? ' is-ativo' : ''}`}
+              aria-pressed={camm === c}
+              onClick={() => {
+                setCamm(c);
+                setCat(''); // a categoria escolhida pode não existir na outra CAMM
+              }}
+            >
+              {c ? (
+                <>
+                  <IconeTm nome="local" tamanho={16} /> {c}
+                </>
+              ) : (
+                'Todas'
+              )}
+            </button>
+          ))}
         </div>
         {cats.length > 1 && (
           <div className="tm-chips" role="group" aria-label="Categorias">
@@ -476,19 +498,18 @@ export function TelaCatalogo() {
       ) : rows === null ? (
         <Carregando texto="Buscando as ferramentas…" />
       ) : entradas.length === 0 ? (
-        rm && !busca && !cat ? (
-          <EmptyState
-            titulo="Nenhum item liberado para retirada agora"
-            texto="Para levar e devolver depois, use o Empréstimo."
-            acao={<Botao onClick={() => ir('catalogo', 'emprestimo')}>Fazer um empréstimo</Botao>}
-          />
-        ) : (
-          <EmptyState
-            titulo="Nada encontrado"
-            texto={busca ? `Nenhum item com "${texto(busca)}".` : 'Nenhum item nesta categoria.'}
-            icone="buscar"
-          />
-        )
+        <EmptyState
+          titulo="Nada encontrado"
+          texto={
+            busca
+              ? `Nenhuma ferramenta com "${texto(busca)}"${camm ? ` na ${camm}` : ''}.`
+              : camm && !cat
+                ? `Nenhuma ferramenta na ${camm}.`
+                : 'Nenhuma ferramenta nesta categoria.'
+          }
+          icone="buscar"
+          acao={camm ? <Botao onClick={() => setCamm('')}>Ver todas as CAMMs</Botao> : undefined}
+        />
       ) : virtual ? (
         <ListaVirtual key={vista} entradas={entradas} vista={vista} acima={acima} aoEtiqueta={setFolha} />
       ) : (
@@ -505,7 +526,7 @@ export function TelaCatalogo() {
 
 /** Bandeja fixa embaixo: "N itens separados · Revisar". Fora do contêiner animado da tela (position: fixed). */
 export function Bandeja() {
-  const { bandeja, ir, tela, modulo } = useTerminal();
+  const { bandeja, ir, tela } = useTerminal();
   const visivel = tela === 'catalogo' && bandeja.length > 0;
   const total = totalSeparado(bandeja);
   return (
@@ -524,7 +545,7 @@ export function Bandeja() {
           </span>
           <span className="tm-bandeja__texto">
             <b>{plural(total, 'item separado', 'itens separados')}</b>
-            <small>{modulo === 'retirada' ? 'Retirada (RM)' : 'Empréstimo (EM)'}</small>
+            <small>Empréstimo (EM)</small>
           </span>
           <Botao variante="acao" className="tm-bandeja__revisar" onClick={() => ir('revisao')}>
             Revisar <Icone nome="direita" tamanho={22} />

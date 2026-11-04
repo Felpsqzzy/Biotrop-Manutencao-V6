@@ -1,5 +1,6 @@
-// Regras puras do terminal (sem React): PIN, chave de operação, catálogo (categorias e peças iguais), prazos e textos.
-import type { Emprestimo, Ferramenta, ItemEmprestimo, Separado } from './tipos';
+// Regras puras do terminal (sem React): PIN, chave de operação, catálogo (categorias, CAMM e peças iguais), finalidade,
+// prazos e textos.
+import type { Emprestimo, Ferramenta, Finalidade, ItemEmprestimo, Separado } from './tipos';
 
 export const PIN = 6;
 export const MAX_ITENS = 30;
@@ -14,6 +15,34 @@ const STATUS: Record<string, string> = {
   estornado: 'Estornado',
   aguardando_baixa: 'Aguardando baixa',
 };
+/** CAMMs do filtro e da escolha de quem retira (as da rota: E.CAMMS em server/src/routes/emprestimo.js da V5). */
+export const CAMMS = ['CAMM 1', 'CAMM 2', 'CAMM 3', 'C. LOG'];
+/** Finalidade do empréstimo novo (49), na ordem da tela. Número obrigatório só em OM e TPM (o servidor confere). */
+export const FINALIDADES: { id: Finalidade; texto: string }[] = [
+  { id: 'om', texto: 'Manutenção (OM)' },
+  { id: 'capex', texto: 'CAPEX' },
+  { id: 'tpm', texto: 'TPM' },
+  { id: 'terceira', texto: 'Empresa terceira' },
+  { id: 'outro', texto: 'Outra' },
+];
+// as antigas só aparecem nos empréstimos já gravados
+const FINALIDADE_ANTIGA: Record<string, string> = { sm: 'SM', manutencao: 'Manutenção', consumo: 'Consumo' };
+export const pedeNumero = (f: string) => f === 'om' || f === 'tpm';
+/** "Manutenção (OM) 12345", "CAPEX", "Empresa terceira · Acme": o que o registro mostra da finalidade. */
+export function textoFinalidade(f: unknown, ref?: unknown): string {
+  const nome = FINALIDADES.find((x) => x.id === f)?.texto ?? FINALIDADE_ANTIGA[texto(f)] ?? texto(f);
+  const r = texto(ref);
+  if (!nome) return '';
+  return r ? (pedeNumero(texto(f)) ? `${nome} ${r}` : `${nome} · ${r}`) : nome;
+}
+// dupla confirmação (49): o que o colaborador vê do estado da entrega (confirmada e nao_exigida não aparecem)
+const ENTREGA: Record<string, string> = {
+  aguardando_colaborador: 'Entregue no balcão: confirme o recebimento.',
+  aguardando_almoxarife: 'Aguardando o almoxarifado confirmar a entrega.',
+  sem_almoxarife: 'Sem almoxarife no turno: o próximo almoxarife confirma a entrega.',
+};
+export const textoEntrega = (e: Emprestimo) => ENTREGA[texto(e.entrega)] ?? '';
+export const pedeRecebimento = (e: Emprestimo) => e.entrega === 'aguardando_colaborador' && e.status !== 'estornado';
 // na retirada (RM) o mesmo status quer dizer outra coisa (encerrado = baixada; estornado = recusada)
 const STATUS_RM: Record<string, string> = {
   aguardando_baixa: 'Aguardando baixa do almoxarifado',
@@ -88,6 +117,7 @@ export function novaChave(): string {
 /* ---------------------------------------------------------------- catálogo */
 export const disponivel = (f: Ferramenta | undefined) => Number(f?.saldo?.disponivel) || 0;
 export const categoriaDe = (f: Ferramenta) => texto(f.categoria) || 'Outros';
+export const cammDe = (f: Ferramenta) => texto(f.camm);
 
 /** Categorias presentes, na ordem combinada, com quantas ferramentas cada uma tem. */
 export function categorias(rows: Ferramenta[]): [string, number][] {
@@ -132,7 +162,7 @@ export function agrupar(rows: Ferramenta[]): Entrada[] {
   );
 }
 
-/** O que a pessoa vê de cada entrada: disponível, quantos separados, código e local. */
+/** O que a pessoa vê de cada entrada: disponível, quantos separados, código, local e CAMM. */
 export function resumoEntrada(e: Entrada, bandeja: Separado[]) {
   if (e.tipo === 'unica') {
     const separados = bandeja.filter((x) => x.ferramentaId === e.f.id).reduce((n, x) => n + x.quantidade, 0);
@@ -140,6 +170,7 @@ export function resumoEntrada(e: Entrada, bandeja: Separado[]) {
       nome: e.f.nome,
       codigo: e.f.codigo,
       local: texto(e.f.localizacao),
+      camm: cammDe(e.f),
       categoria: categoriaDe(e.f),
       livres: e.f.controle === 'individual' ? (e.f.unidadesDisponiveis ?? []).length : disponivel(e.f),
       separados,
@@ -147,10 +178,12 @@ export function resumoEntrada(e: Entrada, bandeja: Separado[]) {
     };
   }
   const locais = [...new Set(e.itens.map((f) => texto(f.localizacao)).filter(Boolean))];
+  const camms = [...new Set(e.itens.map(cammDe).filter(Boolean))];
   return {
     nome: e.nome,
     codigo: plural(e.itens.length, 'peça', 'peças'),
     local: locais.length === 1 ? locais[0]! : locais.length ? `Em ${plural(locais.length, 'local', 'locais')}` : '',
+    camm: camms.length === 1 ? camms[0]! : camms.length ? `Em ${plural(camms.length, 'CAMM', 'CAMMs')}` : '',
     categoria: categoriaDe(e.itens[0]!),
     livres: e.itens.filter((f) => disponivel(f) > 0).length,
     separados: bandeja.filter((x) => e.itens.some((f) => f.id === x.ferramentaId)).length,
@@ -170,6 +203,7 @@ export function separadoDe(f: Ferramenta, unidade?: { id: string; identificador:
     codigo: f.codigo,
     nome: f.nome,
     localizacao: texto(f.localizacao) || undefined,
+    camm: cammDe(f) || undefined,
     categoria: categoriaDe(f),
     maximo: unidade ? 1 : Math.min(disponivel(f), MAX_QTD),
   };
@@ -195,7 +229,7 @@ export function alternarEtiqueta(
   return b.length < MAX_ITENS ? [...b, separadoDe(f, unidade)] : b;
 }
 
-/* ---------------------------------------------------------------- empréstimos e retiradas */
+/* ---------------------------------------------------------------- empréstimos (e as retiradas antigas, no histórico) */
 export const ehRM = (e: Emprestimo | null | undefined) => !!e && e.modalidade === 'retirada';
 export const aberto = (e: Emprestimo) => ABERTOS.includes(e.status);
 // retirada (RM) não volta: nada a devolver nela

@@ -146,7 +146,7 @@ export function TelaEntrada() {
     <section className="tm-entrada">
       <div className="tm-entrada__boas">
         <p className="tm-sobretitulo">
-          <IconeTm nome="chaveInglesa" tamanho={18} /> Empréstimo e retirada de ferramentas
+          <IconeTm nome="chaveInglesa" tamanho={18} /> Empréstimo de ferramentas
         </p>
         <h1 className="tm-titulo-grande">Acesso do colaborador</h1>
         <p className="tm-lead">Digite sua matrícula e o seu PIN de 6 dígitos no teclado da tela.</p>
@@ -155,10 +155,10 @@ export function TelaEntrada() {
             <b>1</b>Matrícula e PIN
           </li>
           <li>
-            <b>2</b>Empréstimo ou retirada
+            <b>2</b>Separe as ferramentas
           </li>
           <li>
-            <b>3</b>Separe, confira e confirme
+            <b>3</b>Confira, aceite o termo e confirme
           </li>
         </ol>
         {MODO_DEMO && (

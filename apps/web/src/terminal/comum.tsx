@@ -1,4 +1,5 @@
-// Peças pequenas usadas por várias telas do terminal: cabeçalho, contador − n +, check desenhado e a trava de toque.
+// Peças pequenas usadas por várias telas do terminal: cabeçalho, contador − n +, check desenhado, caixa de aceite (termo,
+// sem almoxarife) e a trava de toque.
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { m } from 'motion/react';
 import { Icone, MOVIMENTO } from '../ui';
@@ -156,6 +157,35 @@ export function Segmento<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+/** Caixa de marcar grande (toque de dedo): termo de responsabilidade e "sem almoxarife no turno". */
+export function Aceite({
+  marcado,
+  aoMudar,
+  children,
+  desligado,
+}: {
+  marcado: boolean;
+  aoMudar: (v: boolean) => void;
+  children: ReactNode;
+  desligado?: boolean;
+}) {
+  return (
+    <label className={`tm-aceite${marcado ? ' is-marcado' : ''}`}>
+      <input
+        type="checkbox"
+        className="tm-aceite__campo"
+        checked={marcado}
+        disabled={desligado}
+        onChange={(e) => aoMudar(e.currentTarget.checked)}
+      />
+      <span className="tm-aceite__caixa" aria-hidden="true">
+        {marcado && <Icone nome="check" tamanho={18} />}
+      </span>
+      <span className="tm-aceite__texto">{children}</span>
+    </label>
   );
 }
 

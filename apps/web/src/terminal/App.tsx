@@ -7,7 +7,8 @@ import { TelaDevolver, TelaDevolverItens, TelaDevolverOk, TelaDevolverRevisao } 
 import { Fundo, TelaEntrada, TelaPrimeiro } from './Entrada';
 import { TerminalProvider, useTerminal, type Tela } from './estado';
 import { TelaMeus } from './Meus';
-import { TelaInicio, TelaModulos } from './Modulos';
+import { TelaInicio } from './Inicio';
+import { TelaReceber } from './Receber';
 import { TelaRevisao, TelaSucesso } from './Revisao';
 import { AvisoInatividade, SaidaAdmin, Saindo } from './Sobreposicoes';
 import { useTelaAtiva } from './telaAtiva';
@@ -17,7 +18,6 @@ import { Topo } from './Topo';
 const TELAS: Record<Tela, () => ReactNode> = {
   entrada: () => <TelaEntrada />,
   primeiro: () => <TelaPrimeiro />,
-  modulos: () => <TelaModulos />,
   inicio: () => <TelaInicio />,
   catalogo: () => <TelaCatalogo />,
   revisao: () => <TelaRevisao />,
@@ -26,13 +26,14 @@ const TELAS: Record<Tela, () => ReactNode> = {
   'devolver-itens': () => <TelaDevolverItens />,
   'devolver-revisao': () => <TelaDevolverRevisao />,
   'devolver-ok': () => <TelaDevolverOk />,
+  receber: () => <TelaReceber />,
   meus: () => <TelaMeus />,
 };
 
 function Casca() {
-  const { tela, modulo, geracaoEntrada } = useTerminal();
+  const { tela, geracaoEntrada } = useTerminal();
   const publica = tela === 'entrada' || tela === 'primeiro';
-  const chave = `${tela}:${modulo ?? ''}:${publica ? geracaoEntrada : ''}`;
+  const chave = `${tela}:${publica ? geracaoEntrada : ''}`;
   return (
     <div className={`tm-app${publica ? ' tm-app--publica' : ''}`} data-tela={tela}>
       {publica && <Fundo />}

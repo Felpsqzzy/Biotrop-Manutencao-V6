@@ -1,24 +1,29 @@
 /**
- * Revisão do que foi separado e o fechamento: "Confirmar empréstimo" (com o prazo padrão à vista) ou "Confirmar
- * retirada". A chave de operação é a mesma até o servidor confirmar (reenvio não duplica). Depois, a tela de sucesso
- * com o check desenhado; nela, toques nos primeiros 700 ms são ignorados.
+ * Revisão do que foi separado e o fechamento do empréstimo (migration 49): a CAMM de quem retira, a finalidade (OM,
+ * CAPEX, TPM, empresa terceira ou outra; número só em OM e TPM), o prazo automático (fim do turno, vindo do servidor:
+ * só exibido), "sem almoxarife no turno" e o termo de responsabilidade, obrigatório antes de "Confirmar empréstimo".
+ * Quem decide é o servidor: a mensagem de erro dele aparece como veio. A chave de operação é a mesma até o servidor
+ * confirmar (reenvio não duplica). Depois, a tela de sucesso com o check desenhado; nela, toques nos primeiros 700 ms
+ * são ignorados.
  */
 import { useState } from 'react';
 import { m } from 'motion/react';
 import { Badge, Botao, EmptyState, Icone, MOVIMENTO } from '../ui';
 import { erroDe } from './api';
-import { CabecalhoTela, Carregando, CheckDesenhado, Contador, useToqueProtegido } from './comum';
+import { Aceite, CabecalhoTela, Carregando, CheckDesenhado, Contador, Segmento, useToqueProtegido } from './comum';
 import { useTerminal } from './estado';
 import { iconeCategoria, IconeTm } from './icones';
-import { ajustarLinha, dataCurta, num, plural, totalSeparado } from './regras';
+import { ajustarLinha, CAMMS, dataCurta, FINALIDADES, num, pedeNumero, plural, texto, totalSeparado } from './regras';
 import { MensagemErro } from './teclado';
-import type { Separado } from './tipos';
+import type { Finalidade, Separado } from './tipos';
 
-function textoPrazo(horas: number | null): string {
-  if (!horas) return 'O prazo de devolução é definido pelo almoxarifado.';
-  const dur = horas % 24 === 0 ? plural(horas / 24, 'dia', 'dias') : plural(horas, 'hora', 'horas');
-  return `Prazo padrão: devolver em até ${dur} (até ${dataCurta(new Date(Date.now() + horas * 3600e3).toISOString())}).`;
-}
+/** Rótulo do campo de referência da finalidade (OM e TPM: número obrigatório; terceira e outra: opcional). */
+const REF: Partial<Record<Finalidade, string>> = {
+  om: 'Número da OM',
+  tpm: 'Número da TPM',
+  terceira: 'Qual empresa? (opcional)',
+  outro: 'Qual? (opcional)',
+};
 
 function LinhaSeparada({ s, aoMudar }: { s: Separado; aoMudar?: (delta: number) => void }) {
   return (
@@ -30,6 +35,7 @@ function LinhaSeparada({ s, aoMudar }: { s: Separado; aoMudar?: (delta: number) 
         <b>{s.nome}</b>
         <small>
           <span className="tm-cod">{s.identificador || s.codigo}</span>
+          {s.camm && ` · ${s.camm}`}
           {s.localizacao && ` · ${s.localizacao}`}
         </small>
       </span>
@@ -55,32 +61,52 @@ function LinhaSeparada({ s, aoMudar }: { s: Separado; aoMudar?: (delta: number) 
 }
 
 export function TelaRevisao() {
-  const { modulo, bandeja, mudarBandeja, sessao, chamar, chaveDe, concluirRetirada, ir, setOcupado } = useTerminal();
+  const { bandeja, mudarBandeja, chamar, chave, concluirEmprestimo, ir, setOcupado, turno, turnoErro, carregarTurno } =
+    useTerminal();
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
-  const rm = modulo === 'retirada';
+  const [camm, setCamm] = useState('');
+  const [finalidade, setFinalidade] = useState<Finalidade | ''>('');
+  const [ref, setRef] = useState('');
+  const [semAlmoxarife, setSemAlmoxarife] = useState(false);
+  const [termo, setTermo] = useState(false);
+
+  /** O que falta preencher (o servidor confere de novo): '' quando está tudo certo. */
+  function falta(): string {
+    if (!camm) return 'Escolha a sua CAMM.';
+    if (!finalidade) return 'Escolha a finalidade do empréstimo.';
+    if (pedeNumero(finalidade) && !texto(ref)) return `Informe o número da ${finalidade.toUpperCase()}.`;
+    if (!termo) return 'Aceite o termo de responsabilidade para retirar.';
+    return '';
+  }
 
   async function confirmar() {
-    if (enviando || !modulo || !bandeja.length) return;
+    if (enviando || !bandeja.length) return;
+    const motivo = falta();
+    if (motivo || !finalidade) return setErro(motivo);
     const itens = bandeja;
     const corpo = {
-      modalidade: modulo,
-      chave: chaveDe(modulo),
+      chave: chave(),
       itens: itens.map((s) =>
         s.unidadeId
           ? { ferramentaId: s.ferramentaId, unidadeId: s.unidadeId, quantidade: 1 }
           : { ferramentaId: s.ferramentaId, quantidade: s.quantidade },
       ),
+      finalidade,
+      finalidadeRef: finalidade === 'capex' ? '' : texto(ref).slice(0, 60),
+      camm,
+      termoAceito: true,
+      ...(semAlmoxarife ? { semAlmoxarife: true } : {}),
     };
     setErro('');
     setEnviando(true);
-    setOcupado(true); // até a resposta: nada de "Separar mais", Voltar ou troca de módulo (a bandeja fica como foi)
+    setOcupado(true); // até a resposta: nada de "Separar mais" nem Voltar (a bandeja fica como foi)
     const r = await chamar('POST', '/emprestimos', corpo);
     if (r.velho) return;
     setOcupado(false);
     setEnviando(false);
     if (!r.ok) return setErro(erroDe(r));
-    concluirRetirada(r.json, itens, modulo);
+    concluirEmprestimo(r.json, itens);
   }
 
   if (!bandeja.length)
@@ -95,10 +121,12 @@ export function TelaRevisao() {
       </section>
     );
   const total = totalSeparado(bandeja);
+  const rotuloRef = finalidade ? REF[finalidade] : undefined;
+  const mudou = () => setErro('');
   return (
     <section className="tm-tela tm-revisao">
       <CabecalhoTela
-        titulo={rm ? 'Revisar a retirada' : 'Revisar o empréstimo'}
+        titulo="Revisar o empréstimo"
         sub={`${plural(total, 'item separado', 'itens separados')}. Confira antes de confirmar.`}
         voltar={() => ir('catalogo')}
         bloqueado={enviando}
@@ -112,13 +140,81 @@ export function TelaRevisao() {
           />
         ))}
       </ul>
+      <div className="bm-painel tm-pedido">
+        <div className="tm-campo-bloco">
+          <span className="tm-rotulo">Sua CAMM</span>
+          <Segmento<string>
+            rotulo="Sua CAMM"
+            valor={camm}
+            aoMudar={(c) => {
+              mudou();
+              setCamm(c);
+            }}
+            opcoes={CAMMS.map((c) => ({ id: c, texto: c }))}
+          />
+        </div>
+        <div className="tm-campo-bloco">
+          <span className="tm-rotulo">Finalidade</span>
+          <Segmento<Finalidade | ''>
+            rotulo="Finalidade"
+            valor={finalidade}
+            aoMudar={(f) => {
+              mudou();
+              setFinalidade(f);
+            }}
+            opcoes={FINALIDADES}
+          />
+        </div>
+        {rotuloRef && (
+          <label className="tm-campo-bloco">
+            <span className="tm-rotulo">{rotuloRef}</span>
+            <input
+              className="tm-campo"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={60}
+              value={ref}
+              onChange={(e) => {
+                mudou();
+                setRef(e.currentTarget.value);
+              }}
+            />
+          </label>
+        )}
+        <Aceite marcado={semAlmoxarife} aoMudar={setSemAlmoxarife} desligado={enviando}>
+          <b>Sem almoxarife no turno</b>
+          <small>A entrega fica para o próximo almoxarife confirmar.</small>
+        </Aceite>
+      </div>
       <div className="bm-vidro tm-fechamento">
-        <p className={`tm-prazo tm-prazo--${rm ? 'info' : 'ok'}`}>
-          <IconeTm nome={rm ? 'saida' : 'volta'} tamanho={22} />
-          {rm
-            ? 'Os itens saem do estoque e ficam aguardando a baixa do almoxarifado. Não precisa devolver.'
-            : textoPrazo(sessao?.prazoPadraoHoras ?? null)}
-        </p>
+        {turno?.prazo ? (
+          <p className="tm-prazo tm-prazo--ok">
+            <Icone nome="relogio" tamanho={22} /> Devolver até {dataCurta(turno.prazo)} (fim do turno).
+          </p>
+        ) : turnoErro ? (
+          <div className="tm-prazo tm-prazo--ruim">
+            <Icone nome="alerta" tamanho={22} /> {turnoErro} <Botao onClick={carregarTurno}>Tentar de novo</Botao>
+          </div>
+        ) : !turno ? (
+          <Carregando texto="Buscando o prazo…" />
+        ) : (
+          <p className="tm-prazo tm-prazo--neutro">
+            <Icone nome="relogio" tamanho={22} /> Devolver até o fim do turno.
+          </p>
+        )}
+        {turno && (
+          <Aceite
+            marcado={termo}
+            aoMudar={(v) => {
+              mudou();
+              setTermo(v);
+            }}
+            desligado={enviando}
+          >
+            <b>Termo de responsabilidade</b>
+            <small>{turno.termo}</small>
+          </Aceite>
+        )}
         <MensagemErro texto={erro} />
         <div className="tm-acoes">
           <Botao className="tm-botao-grande" disabled={enviando} onClick={() => ir('catalogo')}>
@@ -127,7 +223,7 @@ export function TelaRevisao() {
           <Botao
             variante="acao"
             className="tm-botao-grande"
-            disabled={enviando}
+            disabled={enviando || !turno || !termo}
             aria-busy={enviando}
             onClick={() => void confirmar()}
           >
@@ -137,7 +233,7 @@ export function TelaRevisao() {
               </>
             ) : (
               <>
-                <Icone nome="check" tamanho={22} /> {rm ? 'Confirmar retirada' : 'Confirmar empréstimo'}
+                <Icone nome="check" tamanho={22} /> Confirmar empréstimo
               </>
             )}
           </Botao>
@@ -151,7 +247,6 @@ export function TelaSucesso() {
   const { resultado, ir, sair } = useTerminal();
   const protegido = useToqueProtegido();
   if (!resultado) return null;
-  const rm = resultado.modalidade === 'retirada';
   return (
     <section className="tm-tela tm-sucesso">
       <div className="tm-sucesso__topo">
@@ -162,10 +257,10 @@ export function TelaSucesso() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: MOVIMENTO.medio, delay: MOVIMENTO.medio }}
         >
-          {rm ? 'Retirada registrada' : 'Empréstimo registrado'}
+          Empréstimo registrado
         </m.h1>
         <p className="tm-numero">
-          <Badge tom={rm ? 'info' : 'acao'}>{rm ? 'RM' : 'EM'}</Badge> <b>{resultado.numero}</b>
+          <Badge tom="acao">EM</Badge> <b>{resultado.numero}</b>
         </p>
       </div>
       {resultado.repetido && (
@@ -184,13 +279,9 @@ export function TelaSucesso() {
           <LinhaSeparada key={`${s.ferramentaId}:${s.unidadeId ?? ''}:${s.codigo}`} s={s} />
         ))}
       </ul>
-      {rm ? (
-        <p className="tm-prazo tm-prazo--info">
-          <IconeTm nome="saida" tamanho={22} /> Aguardando a baixa do almoxarifado. Não precisa devolver.
-        </p>
-      ) : resultado.prazo ? (
+      {resultado.prazo ? (
         <p className="tm-prazo tm-prazo--ok">
-          <Icone nome="relogio" tamanho={22} /> Devolva até {dataCurta(resultado.prazo)}.
+          <Icone nome="relogio" tamanho={22} /> Devolva até {dataCurta(resultado.prazo)} (fim do turno).
         </p>
       ) : resultado.prazoFalhou ? (
         <p className="tm-prazo tm-prazo--neutro">
@@ -201,8 +292,7 @@ export function TelaSucesso() {
       )}
       <div className="tm-acoes tm-acoes--fim">
         <Botao className="tm-botao-grande" onClick={protegido(() => ir('inicio'))}>
-          <IconeTm nome={rm ? 'saida' : 'separar'} tamanho={22} />{' '}
-          {rm ? 'Fazer outra retirada' : 'Fazer outro empréstimo'}
+          <IconeTm nome="separar" tamanho={22} /> Fazer outro empréstimo
         </Botao>
         <Botao variante="acao" className="tm-botao-grande" onClick={protegido(() => sair('logout'))}>
           <Icone nome="sair" tamanho={22} /> Terminar e sair

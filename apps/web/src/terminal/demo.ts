@@ -2,12 +2,14 @@
  * Demonstração do terminal (só no build `--mode demo`, via import() em ./api.ts; também usada nos testes): responde
  * /api/terminal/* em memória, com o contrato da rota real (mesmos campos, status e mensagens principais).
  * Tudo FICTÍCIO: pessoas com [DEMO], PINs e código do autenticador de demonstração, ferramentas com código D.
- * Cobre: ferramentas por quantidade, por unidade (patrimônio/série), peças iguais (FMNT), retiráveis (mais de 100,
- * para a lista virtualizada), empréstimos abertos e atrasados, uma retirada aguardando baixa e uma baixada.
+ * Cobre (migration 49: só empréstimo): ferramentas por quantidade, por unidade (patrimônio/série), peças iguais (FMNT),
+ * mais de 100 ferramentas (lista virtualizada), a CAMM de cada uma (?camm= filtra), finalidade, termo, prazo do fim do
+ * turno (/prazo), dupla confirmação (um empréstimo do balcão esperando o "recebi"; /recebimento), "sem almoxarife no
+ * turno", empréstimos abertos e atrasados e uma retirada (RM) antiga, só no histórico.
  * O estado vive só nesta página (recarregar volta ao começo).
  */
 import { problemaPin } from './regras';
-import type { Emprestimo, Ferramenta, ItemEmprestimo, Modulo } from './tipos';
+import type { Emprestimo, Entrega, Ferramenta, ItemEmprestimo, Modulo } from './tipos';
 
 interface Pessoa {
   id: string;
@@ -37,6 +39,9 @@ interface EmpDemo extends Emprestimo {
   chave: string;
   itensLista: ItemEmprestimo[];
   devolucoes: string[];
+  /** Nasceu com a dupla confirmação (49); os anteriores ficam false. */
+  duplaConfirmacao: boolean;
+  semAlmoxarife: boolean;
 }
 
 export interface CredencialDemo {
@@ -53,6 +58,26 @@ const DIA = 24 * H;
 const PRAZO_HORAS = 168;
 const INATIVIDADE = 120;
 const CHAVE_OP = /^[A-Za-z0-9_-]{8,80}$/;
+const CAMMS = ['CAMM 1', 'CAMM 2', 'CAMM 3', 'C. LOG'];
+const TERMO =
+  'Declaro que recebi as ferramentas em boas condições e me responsabilizo por devolvê-las no prazo; avarias serão apuradas.';
+const FINALIDADES = ['om', 'capex', 'tpm', 'terceira', 'outro'];
+
+/** emprestimo.prazo_turno (migration 49), hora de Brasília: 07:00–17:59 → 18:00 do dia; 18:00–23:59 → 07:00 do dia
+ *  seguinte; 00:00–06:59 (turno da noite) → 07:00 do mesmo dia. */
+export function prazoTurno(t: number): number {
+  const l = new Date(t - 3 * H);
+  const [y, m, d] = [l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate()];
+  const hr = l.getUTCHours();
+  return hr < 7 ? Date.UTC(y, m, d, 10) : hr < 18 ? Date.UTC(y, m, d, 21) : Date.UTC(y, m, d + 1, 10);
+}
+/** entregaDe() da rota: o que falta na dupla confirmação. */
+function entregaDe(e: EmpDemo): Entrega {
+  if (!e.duplaConfirmacao || e.modalidade === 'retirada' || e.status === 'estornado') return 'nao_exigida';
+  if (e.entregaEm && e.recebimentoEm) return 'confirmada';
+  if (!e.recebimentoEm) return 'aguardando_colaborador';
+  return e.semAlmoxarife ? 'sem_almoxarife' : 'aguardando_almoxarife';
+}
 const semAcento = (v: unknown) =>
   String(v ?? '')
     .normalize('NFD')
@@ -131,7 +156,7 @@ function estadoInicial(agora: number) {
       emConferencia: 0,
       manutencao: 0,
       baixada: 0,
-      retiravel: false,
+      camm: CAMMS[ferramentas.length % CAMMS.length] ?? '',
       foto: null,
       ...extra,
     };
@@ -163,41 +188,28 @@ function estadoInicial(agora: number) {
   nova('FER-D012', 'Lanterna LED recarregável', 'Iluminação', 'Armário D, prateleira 1', 5);
   nova('FER-D013', 'Escada de alumínio 7 degraus', 'Acesso e segurança', 'Corredor do almoxarifado', 2);
   nova('FER-D014', 'Serra tico-tico', 'Elétrica', 'Armário A, prateleira 4', 1, { manutencao: 1 });
+  nova('FER-D015', 'Paquímetro digital 150 mm', 'Medição', 'Armário C, gaveta 4', 2, { camm: '' });
   // peças iguais (códigos FMNT, uma peça por código): aparecem num grupo só e a pessoa escolhe a etiqueta
   for (let i = 1; i <= 6; i++)
-    nova(
-      `FMNT-D20${i}`,
-      'Jogo de chaves Allen 1,5-10 mm',
-      'Manual',
-      i <= 3 ? 'Armário E, CAMM 1' : 'Armário E, CAMM 2',
-      1,
-    );
-  // retiráveis (RM): saem e não voltam; mais de 100 para a lista virtualizada
-  nova('FMNT-D001', 'Disco de corte 4 1/2"', 'Consumíveis', 'Armário F, CAMM 1', 40, { retiravel: true });
-  nova('FMNT-D002', 'Fita isolante 19 mm', 'Elétrica', 'Armário F, CAMM 2', 30, { retiravel: true });
-  nova('FMNT-D003', 'Luva de vaqueta (par)', 'Acesso e segurança', 'Armário F, CAMM 3', 25, { retiravel: true });
+    nova(`FMNT-D20${i}`, 'Jogo de chaves Allen 1,5-10 mm', 'Manual', 'Armário E', 1, {
+      camm: i <= 3 ? 'CAMM 1' : 'CAMM 2',
+    });
+  // jogos e medidas (mais de 100 ferramentas no catálogo, para a lista virtualizada)
   const familias: [string, string, (i: number) => string][] = [
-    ['BR', 'Broca HSS', (i) => `${(1 + i * 0.5).toFixed(1).replace('.', ',')} mm`],
-    ['LX', "Lixa d'água grão", (i) => String(80 + i * 40)],
-    ['AB', 'Abraçadeira de nylon', (i) => `${100 + i * 20} mm (pacote)`],
-    [
-      'RB',
-      'Rebite pop',
-      (i) => `${(3 + (i % 4) * 0.8).toFixed(1).replace('.', ',')} x ${8 + Math.floor(i / 4) * 2} mm`,
-    ],
-    ['PF', 'Parafuso sextavado', (i) => `M${6 + (i % 6) * 2} x ${20 + Math.floor(i / 6) * 10} mm`],
+    ['CC', 'Chave combinada', (i) => `${6 + i} mm`],
+    ['SQ', 'Soquete 1/2"', (i) => `${8 + i} mm`],
+    ['CA', 'Chave Allen', (i) => `${(1.5 + i * 0.5).toFixed(1).replace('.', ',')} mm`],
+    ['CF', 'Chave de fenda', (i) => `${(i % 4) + 1}/8" x ${3 + Math.floor(i / 4)}"`],
+    ['CH', 'Chave Philips', (i) => `PH${i % 4} x ${3 + Math.floor(i / 4)}"`],
   ];
   familias.forEach(([sigla, nome, medida], k) => {
     for (let i = 0; i < 22; i++)
       nova(
-        `CNS-D${sigla}${String(i + 1).padStart(2, '0')}`,
+        `FER-D${sigla}${String(i + 1).padStart(2, '0')}`,
         `${nome} ${medida(i)}`,
-        'Consumíveis',
-        `Armário G, gaveta ${k + 1}`,
-        5 + ((i * 7) % 20),
-        {
-          retiravel: true,
-        },
+        'Manual',
+        `Armário H, gaveta ${k + 1}`,
+        1 + ((i * 7) % 4),
       );
   });
 
@@ -209,6 +221,7 @@ function estadoInicial(agora: number) {
     criado: number,
     itens: [string, number, string?][],
     fim?: { status: string; quando: number; devolvida?: boolean },
+    extra: Partial<EmpDemo> = {},
   ) => {
     const e: EmpDemo = {
       id: id('e'),
@@ -222,6 +235,15 @@ function estadoInicial(agora: number) {
       chave: `demo-${seq}-inicial`,
       itensLista: [],
       devolucoes: [],
+      // do terminal, com a dupla confirmação: recebido na hora e entregue (confirmado pelo almoxarife)
+      duplaConfirmacao: modalidade === 'emprestimo',
+      semAlmoxarife: false,
+      finalidade: 'om',
+      finalidadeRef: '40125',
+      camm: 'CAMM 1',
+      entregaEm: new Date(criado).toISOString(),
+      recebimentoEm: new Date(criado).toISOString(),
+      ...extra,
     };
     for (const [codigo, q, ident] of itens) {
       const f = porCodigo(codigo);
@@ -256,9 +278,22 @@ function estadoInicial(agora: number) {
     ['FER-D001', 1, 'PAT-D1001'],
     ['FER-D008', 2],
   ]);
-  registrar('p1', 'emprestimo', agora - 9 * DIA, [['FER-D004', 1, 'SN-D-MD01']]);
-  registrar('p1', 'retirada', agora - 3 * H, [['FMNT-D001', 2]]);
-  registrar('p1', 'retirada', agora - 5 * DIA, [['FMNT-D002', 1]], { status: 'encerrado', quando: agora - 4 * DIA });
+  // anterior à dupla confirmação (e atrasado)
+  registrar('p1', 'emprestimo', agora - 9 * DIA, [['FER-D004', 1, 'SN-D-MD01']], undefined, {
+    duplaConfirmacao: false,
+    finalidade: 'manutencao',
+    finalidadeRef: '',
+    camm: '',
+  });
+  // registrado no balcão: o almoxarife entregou e falta o "recebi" do colaborador (com o termo)
+  registrar('p1', 'emprestimo', agora - 2 * H, [['FER-D009', 1]], undefined, {
+    finalidade: 'capex',
+    finalidadeRef: '',
+    camm: 'CAMM 2',
+    recebimentoEm: null,
+  });
+  // retirada (RM) antiga: só no histórico
+  registrar('p1', 'retirada', agora - 5 * DIA, [['FER-D010', 1]], { status: 'encerrado', quando: agora - 4 * DIA });
   registrar('p1', 'emprestimo', agora - 12 * DIA, [['FER-D011', 1]], {
     status: 'devolvido',
     quando: agora - 11 * DIA,
@@ -303,7 +338,7 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       categoria: f.categoria,
       controle: f.controle,
       localizacao: f.localizacao,
-      retiravel: f.retiravel,
+      camm: f.camm,
       foto: null,
       saldo: {
         disponivel,
@@ -351,6 +386,12 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       pendente: e.itensLista.reduce((n, i) => n + Number(i.pendente), 0),
       emConferencia: e.itensLista.reduce((n, i) => n + Number(i.emConferencia), 0),
       itensLista: e.itensLista.map((i) => ({ ...i })),
+      camm: e.camm,
+      finalidade: e.finalidade,
+      finalidadeRef: e.finalidadeRef,
+      entrega: entregaDe(e),
+      entregaEm: e.entregaEm,
+      recebimentoEm: e.recebimentoEm,
     };
   };
 
@@ -398,13 +439,25 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
     const eu = s.pessoas.find((p) => p.id === sessao);
     if (!eu) return falha(401, 'Sessão do terminal encerrada.');
     if (metodo === 'GET' && caminho === 'eu')
-      return ok(200, { colaborador: colaborador(eu), inatividadeSegundos: INATIVIDADE, prazoPadraoHoras: PRAZO_HORAS });
+      return ok(200, {
+        colaborador: colaborador(eu),
+        inatividadeSegundos: INATIVIDADE,
+        prazoPadraoHoras: PRAZO_HORAS,
+        prazoPrevisto: new Date(prazoTurno(agora)).toISOString(),
+        termo: TERMO,
+        camms: CAMMS,
+      });
+    if (metodo === 'GET' && caminho === 'prazo')
+      return ok(200, { prazo: new Date(prazoTurno(agora)).toISOString(), termo: TERMO });
     if (metodo === 'GET' && caminho === 'ferramentas') {
-      // como a rota: retirada filtra as retiráveis antes do limite; ordem por nome; passou do limite, "cortado"
+      // como a rota: todas as ativas; ?camm= filtra antes do limite; ordem por nome; passou do limite, "cortado"
       const q = semAcento(u.searchParams.get('q')).trim();
-      const rm = u.searchParams.get('modalidade') === 'retirada';
+      const camm = u.searchParams.get('camm') ?? '';
+      if (camm && !CAMMS.includes(camm)) return falha(400, 'CAMM inválida: use CAMM 1, CAMM 2, CAMM 3 ou C. LOG.');
       const achados = s.ferramentas
-        .filter((f) => (!rm || f.retiravel) && (!q || semAcento(`${f.codigo} ${f.nome} ${f.categoria}`).includes(q)))
+        .filter(
+          (f) => (!camm || f.camm === camm) && (!q || semAcento(`${f.codigo} ${f.nome} ${f.categoria}`).includes(q)),
+        )
         .sort((x, z) => x.nome.localeCompare(z.nome, 'pt-BR') || x.codigo.localeCompare(z.codigo));
       return ok(200, { rows: achados.slice(0, maxCatalogo).map(linhaFerr), cortado: achados.length > maxCatalogo });
     }
@@ -430,16 +483,36 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       const chave = String(b.chave ?? '');
       if (!CHAVE_OP.test(chave)) return falha(400, 'Chave de operação inválida.');
       const rep = s.emprestimos.find((e) => e.colaboradorId === eu.id && e.chave === chave);
-      if (rep) return ok(200, { id: rep.id, numero: rep.numero, modalidade: rep.modalidade, repetido: true });
-      const modalidade: Modulo = b.modalidade === 'retirada' ? 'retirada' : 'emprestimo';
+      if (rep)
+        return ok(200, {
+          id: rep.id,
+          numero: rep.numero,
+          itens: rep.itensLista.length,
+          prazo: rep.prazo,
+          repetido: true,
+        });
+      // como a rota e emprestimo.executar() (49): só empréstimo, finalidade, número em OM e TPM, CAMM e o termo
+      if (b.modalidade === 'retirada')
+        return falha(400, 'Retirada sem devolução não é mais feita aqui: registre um empréstimo.');
       const itens = Array.isArray(b.itens) ? (b.itens as Record<string, unknown>[]) : [];
+      if (itens.some((i) => i && (i.materialCodigo != null || !i.ferramentaId)))
+        return falha(400, 'O terminal empresta só ferramentas. Material é retirado no balcão do almoxarifado.');
       if (!itens.length) return falha(400, 'Escolha pelo menos uma ferramenta.');
       if (itens.length > 30) return falha(400, 'Até 30 ferramentas por retirada.');
+      const fin = String(b.finalidade ?? '');
+      const ref = String(b.finalidadeRef ?? '')
+        .trim()
+        .slice(0, 60);
+      if (!fin) return falha(400, 'Informe a finalidade: OM, CAPEX, TPM, empresa terceira ou outra.');
+      if (!FINALIDADES.includes(fin))
+        return falha(400, 'Finalidade inválida: use OM, CAPEX, TPM, empresa terceira ou outra.');
+      if ((fin === 'om' || fin === 'tpm') && !ref) return falha(400, `Informe o número da ${fin.toUpperCase()}.`);
+      const camm = b.camm == null ? '' : String(b.camm);
+      if (camm && !CAMMS.includes(camm)) return falha(400, 'CAMM inválida: use CAMM 1, CAMM 2, CAMM 3 ou C. LOG.');
+      if (b.termoAceito !== true) return falha(400, 'Aceite o termo de responsabilidade para retirar.');
       for (const it of itens) {
         const f = s.ferramentas.find((x) => x.id === it.ferramentaId);
         if (!f) return falha(400, 'Ferramenta não encontrada.');
-        if (modalidade === 'retirada' && !f.retiravel)
-          return falha(400, `${f.nome} não pode ser retirada, só emprestada.`);
         const linha = linhaFerr(f);
         if (f.controle === 'individual') {
           if (!linha.unidadesDisponiveis?.some((x) => x.id === it.unidadeId))
@@ -450,15 +523,24 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
       const e: EmpDemo = {
         id: s.seq(),
         numero: `EMP-D${String(s.emprestimos.length + 1).padStart(5, '0')}`,
-        modalidade,
-        status: modalidade === 'retirada' ? 'aguardando_baixa' : 'em_andamento',
+        modalidade: 'emprestimo',
+        status: 'em_andamento',
         criadoEm: new Date(agora).toISOString(),
-        prazo: modalidade === 'retirada' ? null : new Date(agora + PRAZO_HORAS * H).toISOString(),
+        // prazo automático: fim do turno (o do pedido é ignorado)
+        prazo: new Date(prazoTurno(agora)).toISOString(),
         encerradoEm: null,
         colaboradorId: eu.id,
         chave,
         itensLista: [],
         devolucoes: [],
+        finalidade: fin,
+        finalidadeRef: fin === 'capex' ? '' : ref,
+        camm,
+        // no terminal o termo aceito é o "recebi"; falta o almoxarife confirmar a entrega
+        duplaConfirmacao: true,
+        semAlmoxarife: b.semAlmoxarife === true,
+        entregaEm: null,
+        recebimentoEm: new Date(agora).toISOString(),
       };
       for (const it of itens) {
         const f = s.ferramentas.find((x) => x.id === it.ferramentaId)!;
@@ -481,7 +563,17 @@ export function criarDemo(opc: { atraso?: number; agora?: () => number; maxCatal
         });
       }
       s.emprestimos.push(e);
-      return ok(201, { id: e.id, numero: e.numero, modalidade });
+      return ok(201, { id: e.id, numero: e.numero, itens: e.itensLista.length, prazo: e.prazo, repetido: false });
+    }
+    if (metodo === 'POST' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'recebimento') {
+      const e = s.emprestimos.find((x) => x.id === partes[1] && x.colaboradorId === eu.id);
+      if (!e) return falha(404, 'Empréstimo não encontrado.');
+      if (e.recebimentoEm) return ok(200, { id: e.id, recebimentoEm: e.recebimentoEm, repetido: true });
+      if (entregaDe(e) !== 'aguardando_colaborador')
+        return falha(409, 'Este empréstimo não pede confirmação de recebimento.');
+      if (b.termoAceito !== true) return falha(400, 'Aceite o termo de responsabilidade para confirmar o recebimento.');
+      e.recebimentoEm = new Date(agora).toISOString();
+      return ok(200, { id: e.id, recebimentoEm: e.recebimentoEm, repetido: false });
     }
     if (metodo === 'POST' && partes[0] === 'emprestimos' && partes.length === 3 && partes[2] === 'devolucoes') {
       const chave = String(b.chave ?? '');

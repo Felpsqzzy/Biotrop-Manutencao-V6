@@ -1,6 +1,7 @@
 /**
- * Meus empréstimos (EM: em aberto e histórico) e Minhas retiradas (RM: aguardando baixa e baixadas). A API devolve até
- * 200 registros; passou disso ("cortado"), a tela avisa que os mais antigos ficaram de fora. Mais de 100 na aba, a
+ * Meus empréstimos (em aberto e histórico; as retiradas RM antigas aparecem junto, com o selo RM). Cada registro mostra
+ * a finalidade, a CAMM e o estado da entrega (dupla confirmação, 49): o que espera o "recebi" leva a "Confirmar
+ * recebimento". A API devolve até 200 registros; passou disso ("cortado"), a tela avisa que os mais antigos ficaram de fora. Mais de 100 na aba, a
  * lista é virtualizada (só os registros à vista vão para o DOM).
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
@@ -11,7 +12,19 @@ import { CabecalhoTela, Carregando, Segmento, useMargemLista } from './comum';
 import { LinhaPrazo } from './Devolver';
 import { useTerminal } from './estado';
 import { IconeTm } from './icones';
-import { aberto, dataHora, devolviveis, ehRM, estadoItem, plural, textoStatus, tomStatus } from './regras';
+import {
+  aberto,
+  dataHora,
+  devolviveis,
+  ehRM,
+  estadoItem,
+  pedeRecebimento,
+  plural,
+  textoEntrega,
+  textoFinalidade,
+  textoStatus,
+  tomStatus,
+} from './regras';
 import type { Emprestimo } from './tipos';
 
 type Aba = 'abertos' | 'fechados';
@@ -24,8 +37,10 @@ const TOM: Record<ReturnType<typeof tomStatus>, TomBadge> = {
   ruim: 'ruim',
 };
 
-function Registro({ e, aoDevolver }: { e: Emprestimo; aoDevolver?: () => void }) {
+function Registro({ e, aoDevolver, aoReceber }: { e: Emprestimo; aoDevolver?: () => void; aoReceber?: () => void }) {
   const rm = ehRM(e);
+  const meta = [textoFinalidade(e.finalidade, e.finalidadeRef), e.camm].filter(Boolean).join(' · ');
+  const entrega = aberto(e) ? textoEntrega(e) : '';
   return (
     <article className="bm-painel tm-registro" aria-label={e.numero}>
       <div className="tm-registro__cabeca">
@@ -34,7 +49,13 @@ function Registro({ e, aoDevolver }: { e: Emprestimo; aoDevolver?: () => void })
         <Badge tom={TOM[tomStatus(e)]}>{textoStatus(e)}</Badge>
         <small>{dataHora(e.criadoEm)}</small>
       </div>
+      {!rm && meta && <p className="tm-registro__meta">{meta}</p>}
       {!rm && aberto(e) && <LinhaPrazo e={e} />}
+      {!rm && entrega && (
+        <p className="tm-prazo tm-prazo--info">
+          <Icone nome="info" tamanho={20} /> {entrega}
+        </p>
+      )}
       {rm && e.status === 'aguardando_baixa' && (
         <p className="tm-prazo tm-prazo--info">
           <IconeTm nome="saida" tamanho={20} /> Não precisa devolver.
@@ -50,6 +71,11 @@ function Registro({ e, aoDevolver }: { e: Emprestimo; aoDevolver?: () => void })
           </li>
         ))}
       </ul>
+      {aoReceber && (
+        <Botao variante="acao" className="tm-botao-grande" onClick={aoReceber}>
+          <Icone nome="check" tamanho={22} /> Confirmar recebimento
+        </Botao>
+      )}
       {aoDevolver && (
         <Botao variante="acao" className="tm-botao-grande" onClick={aoDevolver}>
           <IconeTm nome="devolver" tamanho={22} /> Devolver
@@ -90,8 +116,7 @@ function RegistrosVirtual({
 }
 
 export function TelaMeus() {
-  const { modulo, chamar, ir, setDev } = useTerminal();
-  const rm = modulo === 'retirada';
+  const { chamar, ir, setDev } = useTerminal();
   const [rows, setRows] = useState<Emprestimo[] | null>(null);
   const [cortado, setCortado] = useState(false);
   const [erro, setErro] = useState('');
@@ -111,15 +136,15 @@ export function TelaMeus() {
     });
   }, [chamar, recarga]);
 
-  const doModulo = (rows ?? []).filter((e) => ehRM(e) === rm);
-  const abertos = doModulo.filter(aberto);
-  const fechados = doModulo.filter((e) => !aberto(e));
+  const abertos = (rows ?? []).filter(aberto);
+  const fechados = (rows ?? []).filter((e) => !aberto(e));
   const mostrados = aba === 'abertos' ? abertos : fechados;
   const registro = (e: Emprestimo) => (
     <Registro
       e={e}
+      aoReceber={pedeRecebimento(e) ? () => ir('receber') : undefined}
       aoDevolver={
-        !rm && aberto(e) && devolviveis(e).length
+        aberto(e) && devolviveis(e).length
           ? () => {
               setDev({ id: e.id, sel: {}, de: 'meus' });
               ir('devolver-itens');
@@ -128,16 +153,14 @@ export function TelaMeus() {
       }
     />
   );
-  const rotulos = rm
-    ? { abertos: 'Aguardando baixa', fechados: 'Baixadas' }
-    : { abertos: 'Em aberto', fechados: 'Histórico' };
+  const rotulos = { abertos: 'Em aberto', fechados: 'Histórico' };
 
   return (
     <section className="tm-tela">
       <div ref={acima} className="tm-tela__topo">
         <CabecalhoTela
-          titulo={rm ? 'Minhas retiradas' : 'Meus empréstimos'}
-          sub={rm ? 'Retiradas (RM) não voltam: o almoxarifado dá a baixa.' : 'Prazos e o que ainda está com você.'}
+          titulo="Meus empréstimos"
+          sub="Prazos e o que ainda está com você."
           voltar={() => ir('inicio')}
         />
         <Segmento<Aba>
@@ -167,15 +190,7 @@ export function TelaMeus() {
         <Carregando texto="Buscando seus registros…" />
       ) : !mostrados.length ? (
         <EmptyState
-          titulo={
-            aba === 'abertos'
-              ? rm
-                ? 'Nenhuma retirada aguardando baixa'
-                : 'Nenhum empréstimo em aberto'
-              : rm
-                ? 'Nenhuma retirada baixada ainda'
-                : 'Nada no histórico ainda'
-          }
+          titulo={aba === 'abertos' ? 'Nenhum empréstimo em aberto' : 'Nada no histórico ainda'}
           icone="check"
           compacto
         />
